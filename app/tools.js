@@ -13,7 +13,7 @@ const WORKSPACE = process.env.WORKSPACE
   || path.join(require('os').homedir(), 'workspace', 'personal-ai');
 
 // Files the agent may NEVER read, even if asked.
-const DENIED_PATHS = [/\.env/i, /\.ssh/i, /\.openclaw\/credentials/i, /credentials/i, /\.git\/config/i];
+const DENIED_PATHS = [/\.env/i, /\.ssh/i, /\.openclaw\/credentials/i, /credentials/i, /\.git\/config/i, /\.db(-shm|-wal)?$/i, /\.sqlite/i];
 
 function safePath(rel) {
   if (typeof rel !== 'string' || !rel) throw new Error('path required');

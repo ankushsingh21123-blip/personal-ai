@@ -49,8 +49,9 @@ async function geminiDirect(prompt) {
   for (const model of GEMINI_MODELS) {
     try {
       const data = await postJson(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-        { generationConfig: { temperature: 0.2 }, contents: [{ parts: [{ text: prompt }] }] }
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        { generationConfig: { temperature: 0.2 }, contents: [{ parts: [{ text: prompt }] }] },
+        { 'x-goog-api-key': key }
       );
       const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
       if (!text) throw new Error('empty Gemini response');

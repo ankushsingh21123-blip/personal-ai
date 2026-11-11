@@ -68,7 +68,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'");
   next();
 });
 app.use(express.json({ limit: '100kb' }));
@@ -102,10 +102,14 @@ app.use('/api', (req, res, next) => {
 });
 app.use('/api/brain/test', brainRateLimit);
 
-// --- auth --------------------------------------------------------------------
+// --- auth (timing-safe compare) --------------------------------------------
 function requireAuth(req, res, next) {
-  const token = req.get('X-Anku-Token');
-  if (!token || token !== process.env.ANKU_TOKEN) {
+  const token = req.get('X-Anku-Token') || '';
+  const expected = process.env.ANKU_TOKEN || '';
+  const a = Buffer.from(token);
+  const b = Buffer.from(expected);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) {
     return res.status(401).json({ ok: false, error: 'unauthorised: X-Anku-Token required' });
   }
   next();
@@ -201,9 +205,14 @@ app.get('/api/status', async (req, res) => {
   });
 });
 
+let chatInFlight = 0;
 app.post('/api/chat', async (req, res) => {
   const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
   if (!text || text.length > 4000) return res.status(400).json({ ok: false, error: 'text required, max 4000 chars' });
+  // Concurrency cap (audit M5): at most 2 agent turns at once — a brain turn
+  // can take minutes on a slow local model and burn free-tier quota.
+  if (chatInFlight >= 2) return res.status(429).json({ ok: false, error: 'busy: 2 agent turns already running, try again in a moment' });
+  chatInFlight++;
   try {
     run('INSERT INTO messages (role, content) VALUES (?, ?)', 'user', text);
     const turn = await agentTurn(text);
@@ -212,8 +221,11 @@ app.post('/api/chat', async (req, res) => {
       text.slice(0, 500), 'done', turn.model, turn.provider, JSON.stringify(turn.actions));
     res.json({ ok: true, job_id: Number(job.lastInsertRowid), reply: turn.reply, model: turn.model, provider: turn.provider, tried: turn.tried, actions: turn.actions });
   } catch (e) {
-    run('INSERT INTO jobs (task, status, evidence) VALUES (?, ?, ?)', text.slice(0, 500), 'failed', e.message);
-    res.status(500).json({ ok: false, error: e.message });
+    run('INSERT INTO jobs (task, status, evidence) VALUES (?, ?, ?)', text.slice(0, 500), 'failed', 'brain failed');
+    console.error('[personal-ai] chat failed:', e.message);
+    res.status(500).json({ ok: false, error: 'brain failed — try again, or check the server log' });
+  } finally {
+    chatInFlight--;
   }
 });
 

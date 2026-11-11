@@ -160,6 +160,11 @@ test('cyber: symlink escape blocked (H2 regression)', async () => {
   } finally { fs2.unlinkSync(link); }
 });
 
+test('cyber: SQLite DB file cannot be read via tools (audit M)', async () => {
+  const r = await api('/api/tools', { method: 'POST', body: JSON.stringify({ tool: 'read_file', args: { path: 'data/personal-ai.db' } }) });
+  assert.equal(r.status, 403);
+});
+
 test('frontend: index page served', async () => {
   const r = await fetch(BASE + '/');
   assert.equal(r.status, 200);

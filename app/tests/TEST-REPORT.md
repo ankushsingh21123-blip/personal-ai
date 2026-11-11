@@ -1,9 +1,15 @@
 # TEST-REPORT — Ankush's Personal AI app (full stack, wired up)
 
-## Latest run — 12 Nov 2026, ~01:45 IST (this VM)
+## Latest run — 12 Nov 2026, ~02:05 IST (this VM)
 - Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js`, stops it)
 - Node: v24.22.1, npm 10.9.4, Express 5.3.0
-- **Result: 17 passed, 0 failed, 0 skipped, exit 0, 16.0 s**
+- **Result: 18 passed, 0 failed, 0 skipped, exit 0, 10.4 s**
+
+New in this run vs the 17-test run: audit Medium fixes — Gemini key now sent via `x-goog-api-key` header (not URL query), SQLite DB files blocked from `read_file`, timing-safe token compare, stricter CSP (`object-src 'none'`, `base-uri 'self'`, no `unsafe-inline`), concurrency cap of 2 on `/api/chat`, generic brain-failure error (upstream text no longer returned verbatim). New test #18 (DB read blocked) passes.
+
+## Earlier runs
+- 12 Nov ~01:50 IST: **17 passed, 0 failed, 17.2 s**
+- 12 Nov ~01:30 IST: **13 passed, 0 failed, 33.2 s** (before edit_file/web_fetch/memory/parallel-tools)
 
 | # | Test | Model / evidence |
 |---|---|---|
