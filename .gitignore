@@ -1,0 +1,8 @@
+.env.local
+.env
+node_modules/
+data/*.db
+data/*.db-journal
+*.log
+.openclaw/
+__pycache__/

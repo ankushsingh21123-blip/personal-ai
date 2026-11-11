@@ -1,0 +1,194 @@
+# Personal AI — laptop setup guide (Phase 0–2)
+
+**Owner:** Ankush Singh · **Cost:** $0 — no paid signups, no spending, no Connects.
+**Stack:** OpenClaw (gateway) + goose (coding agent) · Brain order: Gemini free → Groq free → Ollama local (qwen3:8b).
+**Status:** built and tested on the Muse VM on 11 Nov 2026. See `tests/` for the evidence.
+The VM is weaker than a laptop (1.5 shared CPUs, 6 GB cgroup RAM) — anything that was
+slow or blocked there is flagged below with the laptop expectation.
+
+## What you need before you start
+
+- Your Windows laptop (16 GB RAM recommended; 8 GB minimum — qwen3:8b needs ~6 GB).
+- A Telegram account (phone step, Phase 4). WhatsApp comes later, on a **spare number only**.
+- Your Gemini API key — the one already created 10 Nov 2026 in AI Studio, project AgroX,
+  key name `muse-email-triage-2026-11-10`. You will paste it into a secure form / into
+  OpenClaw's onboarding prompt on your own laptop. **Never paste it in chat.**
+- ~10 GB free disk (models + Node + WSL2).
+
+## Step 0 — install the base tools (PowerShell, run as Ankush)
+
+```powershell
+winget install OpenJS.NodeJS.LTS        # Node 22 LTS (OpenClaw needs 22+)
+winget install Git.Git
+winget install Python.Python.3.12
+wsl --install -d Ubuntu                  # WSL2 Ubuntu — the agent runs here
+```
+
+Close and re-open PowerShell, then check:
+
+```powershell
+node --version   # want v22.x
+npm --version
+git --version
+python --version
+wsl --status
+```
+
+If `winget` is missing, install the tools from their sites: nodejs.org (22 LTS),
+git-scm.com, python.org, and enable WSL2 from "Turn Windows features on or off".
+
+## Step 1 — Ollama (local brain)
+
+1. Download `OllamaSetup.exe` from https://ollama.com/download and run it.
+   Ollama runs as a Windows service and auto-starts on login.
+2. In PowerShell, set the big context window (Ollama's default 4096 silently truncates
+   agent prompts — this bit us on the VM):
+
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_CONTEXT_LENGTH", "32768", "User")
+$env:OLLAMA_CONTEXT_LENGTH = "32768"
+```
+
+3. Restart Ollama (right-click the Ollama tray icon → Quit, then start it again),
+   then pull the model and test it:
+
+```powershell
+ollama pull qwen3:8b
+ollama run qwen3:8b "Say hello in one sentence, then stop."
+```
+
+If qwen3:8b is too slow on 8 GB RAM, use `qwen3:4b` instead (`ollama pull qwen3:4b`).
+On the VM we could not pull any model from `registry.ollama.ai` — the VM's egress
+proxy blocks Ollama's direct connection (curl works, Ollama's client does not).
+**Your laptop has normal internet, so `ollama pull` should work directly.**
+If it ever fails on the laptop, the fallback is: download the GGUF from
+Hugging Face (`Qwen/Qwen3-8B-GGUF`, file `Qwen3-8B-Q4_K_M.gguf`) and
+`ollama create qwen3:8b -f Modelfile` with `FROM <path-to-gguf>` — exactly how
+we got a model onto the VM (see `tests/job4-gateway-local.md`).
+
+## Step 2 — project folder + identity files
+
+```powershell
+mkdir $HOME\personal-ai\memory, $HOME\personal-ai\logs, $HOME\personal-ai\projects, $HOME\personal-ai\skills
+cd $HOME\personal-ai
+git init
+@(".env.local", "node_modules/", ".openclaw/") | Set-Content .gitignore -Encoding utf8
+```
+
+Copy these files from this workspace into `$HOME\personal-ai`:
+`AGENT.md`, `permissions.json`, `skills/goose.md`.
+Put your Gemini key in `.env.local` as `GEMINI_API_KEY=...` (secure form only).
+
+Working model names, verified 10–11 Nov 2026: **`gemini-3.6-flash`**,
+**`gemini-3.5-flash-lite`**. `gemini-2.5-flash` is gone for new users (404).
+`gemini-3.8-flash` returned 503 (high demand) on 10 Nov.
+
+## Step 3 — OpenClaw (gateway)
+
+```powershell
+npm install -g openclaw@latest
+openclaw --version
+openclaw onboard --install-daemon
+```
+
+Onboarding prompts (pick these):
+- **Quick Start**
+- **Gemini first** — paste your key when asked (stored in the OS credential
+  store / `~/.openclaw`, never in chat). **Ollama second.**
+- **Gateway bind: 127.0.0.1 only** — refuse 0.0.0.0 if offered.
+
+Verify: open http://localhost:18789/ — the dashboard loads and the gateway shows RUNNING.
+
+On the VM, onboarding first failed because no Ollama model existed yet
+(it tried to download `gemma4` and the pull stalled). **Pull the model first
+(Step 1), then onboard.** On the laptop, with the model present, onboarding
+completes in under a minute.
+
+Then run the Phase 2 test:
+
+```powershell
+openclaw agent -m "List the files in your workspace, then read AGENT.md and tell me in 2 sentences what this agent is for. Do not change anything."
+```
+
+Pass mark: it lists the files and answers from AGENT.md. (On the VM this turn
+could not complete — see `tests/job4-gateway-local.md` for the exact VM limit.
+On a 16 GB laptop with qwen3:8b it should finish in 1–2 minutes.)
+
+## Step 4 — goose (coding agent)
+
+1. Install goose from https://github.com/block/goose/releases (Windows installer).
+2. Configure it:
+
+```powershell
+goose configure
+# Provider: ollama  ->  Model: qwen3:8b
+# (or Provider: gemini, if your goose version offers it)
+```
+
+3. Run the first proof project (must pass before anything else):
+
+```powershell
+mkdir $HOME\personal-ai\projects\hello-proof; cd $HOME\personal-ai\projects\hello-proof
+goose run --text "Create a small Node.js + Express + SQLite app with one page that says Hello, Ankush, and one API route /api/health that returns {ok:true}. Add a README, a .gitignore that ignores .env.local, and npm test that checks /api/health."
+npm install; npm test
+```
+
+Pass mark: `npm test` passes, the app runs on localhost:3000,
+`/api/health` returns `{"ok":true}`, and `.env.local` is git-ignored.
+On the VM, goose with the tiny qwen3:0.6b model could not do this build
+(see `tests/job5-goose-hello-proof.md`). qwen3:8b on the laptop is the
+real coding brain; Gemini free tier is the fallback if Ollama is slow.
+
+Note: in goose 1.59, `goose run` takes **no positional argument** — use
+`goose run --text "..."` or `goose run -i file.txt`.
+
+## Step 5 — the 5 real jobs (Phase 1 gate)
+
+Before any cloud work, the laptop agent must pass 5 real jobs:
+1. Summarise a file.
+2. Draft an email from mailbox data (draft only — never send without Ankush's yes).
+3. Web search + summarise.
+4. Build a small project with goose and run its tests.
+5. A job Ankush picks himself.
+
+The first three already passed on the VM via Gemini (see `tests/job1-3`).
+Jobs 4–5 must pass on the laptop.
+
+## Phase 4 — phone (Telegram first) — NOT in this guide's script
+
+Do this only after the 5 jobs pass on the laptop:
+1. In Telegram, message **@BotFather**, `/newbot`, name it, copy the token.
+2. `openclaw channels add telegram` and paste the token when asked.
+3. Test: message the bot "What is in AGENT.md?" — it should answer.
+4. WhatsApp comes **second, on a spare number only** (Baileys ban risk on a
+   primary number). Do not link your main WhatsApp.
+
+## Phase 5–6 — cloud (only after Phase 4 passes)
+
+- Cloud = Oracle Cloud Always Free (2 AMD VMs) or a free-tier VPS. Only after
+  5 real jobs pass on the laptop. No paid tier — Fly.io/Render paid tiers are
+  NOT approved. Oracle account creation is Ankush-only (needs his email + card
+  verification, even for the free tier).
+
+## VM-only quirks (do NOT apply these on the laptop)
+
+- `npm install -g openclaw` fails on the VM with an `EPERM chown` error on
+  `node-edge-tts`. Workaround used: pnpm (`pnpm add -g openclaw`). On Windows,
+  use the standard `npm install -g openclaw` first.
+- `ollama pull` fails on the VM (egress proxy blocks Ollama's direct connection).
+  Workaround: download the GGUF via curl from Hugging Face, `ollama create`.
+- `/tmp` on the VM is a 512 MB tmpfs — use `~/workspace/.tmp` for big files.
+- OpenClaw's base prompt is ~15,000 tokens. Its default context (32,768) is
+  right for the laptop; on the VM we had to lower it to 16,384 and the 0.6b
+  model still timed out. Do NOT lower the context on the laptop.
+- `ollama run` with a prompt arg can hang waiting on stdin in scripts — use
+  the API (`curl http://127.0.0.1:11434/api/generate`) or `ollama run ... < /dev/null`.
+
+## What still needs Ankush
+
+- Run this guide on his Windows laptop (Muse cannot reach it).
+- His Gemini key (secure form only) and, later, a Groq key (free tier) if he wants the fallback.
+- Telegram bot token (Phase 4) — he creates it via @BotFather.
+- A spare phone number for WhatsApp (Phase 4, later) — never his primary.
+- Oracle Cloud account (Phase 6) — only after 5 laptop jobs pass.
+- His yes before any GitHub push, any email send, or any application submission.

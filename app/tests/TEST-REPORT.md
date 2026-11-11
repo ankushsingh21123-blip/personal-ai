@@ -1,0 +1,56 @@
+# TEST-REPORT — Ankush's Personal AI app (full stack, wired up)
+
+## Latest run — 12 Nov 2026, ~01:45 IST (this VM)
+- Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js`, stops it)
+- Node: v24.22.1, npm 10.9.4, Express 5.3.0
+- **Result: 17 passed, 0 failed, 0 skipped, exit 0, 16.0 s**
+
+| # | Test | Model / evidence |
+|---|---|---|
+| 1 | health: server is up, no auth needed | 200, `{"ok":true,"service":"ankush-personal-ai"}` |
+| 2 | cyber: auth rejected without token | 401 |
+| 3 | cyber: auth rejected with wrong token | 401 |
+| 4 | status: brain order + wired components | brain order listed, OpenClaw gateway up (200), goose 1.59.0 reported |
+| 5 | brain: Gemini primary answers for real | **gemini-3.5-flash-lite** (Lite-first order, 12 Nov), provider `gemini-vm-helper`, 0.98 s, text contains OK |
+| 6 | brain: Ollama local fallback answers for real | **qwen3:0.6b**, provider `ollama`, 12.4 s |
+| 7 | chat: perceive → reason (Gemini) → act, job + message in SQLite | Gemini, job `done`, message persisted with model recorded |
+| 8 | tools: read_file + write_note | AGENT.md read, note persisted with id |
+| 9 | cyber: path traversal blocked | `../../etc/passwd` → 403 |
+| 10 | cyber: secret file blocked | `.env.local` → 403 |
+| 11 | cyber: dangerous shell denied | `rm -rf /` → 403, never executed |
+| 12 | cyber: send/post denied — approval only | `send_email` → 403; approval created pending; approving it → `executed: false` |
+| 13 | tools: edit_file with backup | edit applied, `.bak` created, content verified, files cleaned up |
+| 14 | tools: web_fetch reads a real https page | `https://example.com` → "Example Domain", 0.33 s |
+| 15 | cyber: web_fetch blocks private URLs | `http://127.0.0.1:3100/...` → 403 |
+| 16 | cyber: symlink escape blocked (H2 regression) | symlink `tests/_link-test.txt -> /etc/passwd` → 403 |
+| 17 | frontend: index page served | 200, contains "Ankush's Personal AI" |
+
+## Earlier run — 12 Nov 2026, ~01:30 IST
+- **13 passed, 0 failed, 33.2 s** (before edit_file/web_fetch/memory/parallel-tools were added; Ollama took 24.9 s then).
+
+## Failures found and fixed in this loop (build → test → debug → test again)
+1. **SyntaxError in tools.js** — adding `edit_file`/`web_fetch` accidentally deleted the `case 'run_command':` header; server would not start. Fixed by restoring the header; `node --check` added to the loop.
+2. **Ollama test timed out at 120 s** — OpenClaw gateway running in the background was hammering Ollama with ~15k-token prompts, starving the app. Root cause: this VM (1.5 shared CPUs, 6 GB) cannot run OpenClaw + the app + Ollama at once. Fix: stop the gateway during app tests (documented in STATUS.md); Ollama test then took 12.4 s. On the laptop (16 GB) they can run together.
+3. **Security-check script false positives** — it flagged the `.env.local` token itself, and comments containing `0.0.0.0` / `exec()`. Fixed to exclude git-ignored files and comments/SQLite `db.exec`.
+4. **Security audit H1–H5 (12 Nov, independent sub-agent audit)** — all fixed, see `tests/security-audit-2026-11-12.md`:
+   - H1 Node patch floor (CVE-2026-111497): startup guard + `engines >=24.22.1 <25` + `.nvmrc` 24.22.1 + Express pinned to 5.3.0 exact.
+   - H2 Symlink escape in `safePath`: refuse symlinks, re-check real path, skip symlinked entries in `list_files` + regression test #16.
+   - H3 Predictable temp prompt file: `mkdtemp` + mode 0600 + cleanup.
+   - H4 Token generation truncated `.env.local`: now appends, preserving existing keys.
+   - H5 Rate limit only on 2 routes: now all `/api` routes (60/min) + `/api/brain/test` stricter (10/min).
+
+## Security checks — 12 Nov 2026, ~01:45 IST
+`bash scripts/security-check.sh` → **ALL PASS** (15 checks). npm audit skipped on this VM (audit endpoint unreachable — re-run on the laptop).
+
+## Model tests — what was actually used
+- **Gemini:** `gemini-3.5-flash-lite` (primary, Lite-first) and `gemini-3.6-flash` (fallback) — both answered for real via the connected Gemini API helper. `gemini-3.8-flash` tested 12 Nov: **503 high demand** (same as 10 Nov) — not used. `gemini-2.5-flash`: 404, never used.
+- **Groq:** NOT tested — no free key was created (Ankush creates it himself at console.groq.com, no card). Code path exists in `brain.js`, provider `groq`, model `openai/gpt-oss-120b`.
+- **Ollama:** `qwen3:0.6b` on this VM — answers short prompts in 12–25 s, too small for agent tool-calling (proven 11 Nov). Laptop model is `qwen3:8b` (or `qwen3-coder:30b` per efficiency research, if RAM allows).
+- **OpenCode 1.19.5:** installed, CLI works (`--version` → 1.19.5). A run with `ollama/qwen3:0.6b` produced no output in 90 s on this VM — same limit as goose, needs 8B/Gemini on the laptop.
+- **OpenClaw 2026.11.3:** reinstalled, gateway dashboard HTTP 200 on 127.0.0.1:18789. Agent turns with `qwen3:0.6b` cannot complete on this VM (~15k-token base prompt, CPU prefill ~5 min, idle timeout) — proven 11 Nov, see `../tests/job4-gateway-local.md`. Laptop (16 GB, qwen3:8b, Gemini brain) should do it in 1–2 min.
+
+## Proof project (separate, built in parallel)
+- `projects/proof-internship-tracker/` — Internship Tracker, full stack, **9/9 tests passing** (verified by re-running `npm test` myself, 12 Nov ~01:45 IST, 6.0 s). See its `TEST-REPORT.md`.
+
+## What is NOT yet proven
+- Groq fallback (no key), Telegram/WhatsApp phone loop (needs Ankush's bot token / spare number), Oracle cloud 7-day uptime (Phase 6, after Phase 5), OpenClaw agent turn with Gemini brain (needs his key on the laptop), OpenCode/goose coding job with qwen3:8b/Gemini (needs the laptop model).

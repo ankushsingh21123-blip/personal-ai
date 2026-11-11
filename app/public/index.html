@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ankush's Personal AI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Ankush's Personal AI</h1>
+  <p>Full working, $0 — frontend + backend + database + server, wired up. Brain: Gemini free → Groq free → Ollama local.</p>
+  <div id="status">Loading status…</div>
+</header>
+<main>
+  <section id="chat-box">
+    <h2>Chat — perceive → reason → act</h2>
+    <div id="messages"></div>
+    <form id="chat-form">
+      <input id="chat-input" maxlength="4000" placeholder="Ask me to list files, read AGENT.md, write a note, run 'date'… — I never send, post or spend without a draft first." autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
+    <p class="hint">Your token is in <code>.env.local</code> (git-ignored). This page is served from 127.0.0.1 only — it never leaves your machine.</p>
+  </section>
+  <section>
+    <h2>Jobs (from the database)</h2>
+    <button id="refresh-jobs">Refresh jobs</button>
+    <ul id="jobs"></ul>
+  </section>
+  <section>
+    <h2>Approvals — draft first, nothing irreversible executes</h2>
+    <form id="approval-form">
+      <input id="ap-action" placeholder="Action, e.g. send email" maxlength="200">
+      <input id="ap-details" placeholder="Exact draft / details" maxlength="5000">
+      <button type="submit">Create draft approval</button>
+    </form>
+    <ul id="approvals"></ul>
+  </section>
+  <section>
+    <h2>Notes / memory</h2>
+    <form id="note-form">
+      <input id="note-title" placeholder="Title" maxlength="200">
+      <input id="note-body" placeholder="Body" maxlength="5000">
+      <button type="submit">Save note</button>
+    </form>
+    <ul id="notes"></ul>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
