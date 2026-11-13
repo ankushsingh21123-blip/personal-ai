@@ -171,3 +171,72 @@ test('frontend: index page served', async () => {
   const html = await r.text();
   assert.match(html, /Ankush's Personal AI/);
 });
+
+test('brain: native tool declarations mirror the allowlisted tools exactly', async () => {
+  const brain = require('../brain');
+  const expected = ['list_files', 'read_file', 'write_note', 'edit_file', 'web_fetch', 'run_command'];
+  assert.deepEqual(brain.TOOL_DECLARATIONS.map(d => d.name).sort(), [...expected].sort());
+  for (const d of brain.TOOL_DECLARATIONS) {
+    assert.equal(typeof d.description, 'string');
+    assert.ok(d.description.length > 0, `${d.name} needs a description`);
+    assert.equal(d.parameters.type, 'OBJECT');
+    assert.ok(d.parameters.properties && typeof d.parameters.properties === 'object');
+  }
+  // No send/post/spend/delete tool is ever declared to the model.
+  assert.ok(!brain.TOOL_DECLARATIONS.some(d => /send|post|spend|delete|email|payment/i.test(d.name)));
+  // Every declared tool is recognised by the live deny-first executor:
+  // calling it with empty args must NOT fail with "tool ... not allowlisted"
+  // (it may fail on missing args — that proves it is recognised, not denied).
+  for (const name of expected) {
+    const r = await api('/api/tools', { method: 'POST', body: JSON.stringify({ tool: name, args: {} }) });
+    if (r.status === 403) assert.doesNotMatch(r.body.error || '', /denied: tool '[^']+' is not allowlisted/);
+  }
+});
+
+test('brain: Gemini function-call responses parse into validated calls', () => {
+  const brain = require('../brain');
+  const data = { candidates: [{ content: { parts: [
+    { text: 'Checking the workspace. ' },
+    { functionCall: { name: 'list_files', args: { path: '.' } } },
+    { functionCall: { name: 'read_file', args: { path: 'AGENT.md' } } },
+  ] } }] };
+  const { text, functionCalls } = brain.parseGeminiResponse(data);
+  assert.equal(text, 'Checking the workspace. ');
+  assert.equal(functionCalls.length, 2);
+  assert.deepEqual(functionCalls[0], { name: 'list_files', args: { path: '.' } });
+  assert.deepEqual(functionCalls[1], { name: 'read_file', args: { path: 'AGENT.md' } });
+});
+
+test('brain: malformed or undeclared function calls are dropped, never trusted', () => {
+  const brain = require('../brain');
+  const data = { candidates: [{ content: { parts: [
+    { functionCall: { name: 'send_email', args: { to: 'x@example.com' } } }, // not declared
+    { functionCall: { name: 'read_file', args: 'AGENT.md' } },              // args not an object
+    { functionCall: { name: 'read_file', args: ['AGENT.md'] } },            // args is an array
+    { functionCall: { args: { path: 'AGENT.md' } } },                       // no name
+    { functionCall: { name: 42, args: {} } },                               // name not a string
+    { functionCall: { name: 'list_files' } },                               // args omitted -> {}
+    { text: 'done' },
+  ] } }] };
+  const { text, functionCalls } = brain.parseGeminiResponse(data);
+  assert.equal(text, 'done');
+  assert.deepEqual(functionCalls, [{ name: 'list_files', args: {} }]);
+  // Empty / garbage payloads parse to nothing, never throw.
+  assert.deepEqual(brain.parseGeminiResponse({}), { text: '', functionCalls: [] });
+  assert.deepEqual(brain.parseGeminiResponse(null), { text: '', functionCalls: [] });
+  assert.deepEqual(brain.parseGeminiResponse({ candidates: [] }), { text: '', functionCalls: [] });
+});
+
+test('brain: agentLoop returns text + evidence shape on the fallback chain (no direct key on this VM)', async () => {
+  const brain = require('../brain');
+  const calls = [];
+  const r = await brain.agentLoop(
+    'Reply with the word OK only.',
+    'Reply with the word OK only.',
+    async (tool, args) => { calls.push([tool, args]); return { ok: true }; },
+  );
+  assert.match(r.text, /OK/i);
+  assert.ok(Array.isArray(r.evidence));
+  assert.ok(Array.isArray(r.tried) && r.tried.length > 0);
+  if (!r.usedTools) assert.equal(calls.length, 0, 'no tool should execute on the text fallback');
+});

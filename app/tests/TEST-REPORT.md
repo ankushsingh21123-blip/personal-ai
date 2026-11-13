@@ -1,6 +1,13 @@
 # TEST-REPORT — Ankush's Personal AI app (full stack, wired up)
 
-## Latest run — 12 Nov 2026, ~02:05 IST (this VM)
+## Latest run — 13 Nov 2026, ~19:30 IST (this VM)
+- Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js`, stops it)
+- Node: v24.22.1, Express 5.3.0
+- **Result: 22 passed, 0 failed, 0 skipped, exit 0, 17.2 s**
+
+New in this run: native function calling (Gemini `functionDeclarations` wired to the deny-first tools, max 2 rounds / 5 calls per round, all checks still in tools.execute; text+JSON fallback kept for the VM-helper/Groq/Ollama paths). New tests #19–22: declarations mirror the allowlisted tools exactly (and no send/post/spend/delete tool is declared); function-call responses parse into validated calls; malformed/undeclared calls are dropped; agentLoop returns the text+evidence shape on the fallback chain. Live chat test answered via `gemini-vm-helper` (gemini-3.5-flash-lite) — no GEMINI_API_KEY on this VM, so live end-to-end native calling is NOT yet proven; it needs his key on the laptop (direct REST path). Security checks re-run same session: **ALL PASS** (npm audit skipped — endpoint unreachable from this VM, as before).
+
+## Earlier run — 12 Nov 2026, ~02:05 IST (this VM)
 - Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js`, stops it)
 - Node: v24.22.1, npm 10.9.4, Express 5.3.0
 - **Result: 18 passed, 0 failed, 0 skipped, exit 0, 10.4 s**
@@ -59,4 +66,5 @@ New in this run vs the 17-test run: audit Medium fixes — Gemini key now sent v
 - `projects/proof-internship-tracker/` — Internship Tracker, full stack, **9/9 tests passing** (verified by re-running `npm test` myself, 12 Nov ~01:45 IST, 6.0 s). See its `TEST-REPORT.md`.
 
 ## What is NOT yet proven
+- Native function calling live end-to-end (needs GEMINI_API_KEY on the laptop — direct REST path; parser + declarations are unit-tested and the fallback is proven live, but no live functionCall round-trip has run yet).
 - Groq fallback (no key), Telegram/WhatsApp phone loop (needs Ankush's bot token / spare number), Oracle cloud 7-day uptime (Phase 6, after Phase 5), OpenClaw agent turn with Gemini brain (needs his key on the laptop), OpenCode/goose coding job with qwen3:8b/Gemini (needs the laptop model).

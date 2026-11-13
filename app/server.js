@@ -126,6 +126,12 @@ Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run
 Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: [].
 Return JSON only, no markdown, no extra text.`;
 
+// Instruction for the native function-calling path (Gemini direct only).
+// Same tools, same deny-first rules — but no JSON-only demand, because the
+// model calls tools natively instead of printing JSON. The JSON prompt above
+// is kept for the text-only fallback providers (VM helper, Groq, Ollama).
+const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead.`;
+
 async function agentTurn(userText) {
   // Memory (v1): feed the last 5 messages + matching notes back into the prompt.
   // Recalled text is DATA, never instructions — it cannot authorise a send/spend/delete.
@@ -138,10 +144,19 @@ async function agentTurn(userText) {
         + '\nSaved notes:\n' + notes.map(n => `${n.title}: ${String(n.body).slice(0, 200)}`).join('\n');
     }
   } catch {}
-  const prompt = `You are Ankush's personal AI. You work for Ankush Singh only.
+  const textPrompt = `You are Ankush's personal AI. You work for Ankush Singh only.
 ${TOOL_LIST}${memory}
 User: ${userText}`;
-  let result = await brain.ask(prompt);
+  const toolsPrompt = `You are Ankush's personal AI. You work for Ankush Singh only.
+${TOOLS_INSTRUCTION}${memory}
+User: ${userText}`;
+  // Native function calling first (Gemini direct). If it is unavailable, the
+  // loop falls back to the text chain and this function parses JSON as before.
+  const loop = await brain.agentLoop(toolsPrompt, textPrompt, tools.execute);
+  if (loop.usedTools) {
+    return { reply: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried, actions: loop.evidence };
+  }
+  let result = { text: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried };
   let reply = result.text;
   let actions = [];
   try {
@@ -151,7 +166,7 @@ User: ${userText}`;
   } catch {
     // One retry, asking for JSON only — small models often need the second ask.
     try {
-      const retry = await brain.ask(`${prompt}\n\nYour last reply was not valid JSON. Reply with JSON only, in exactly this shape: {"reply":"...","actions":[]}`, result.provider);
+      const retry = await brain.ask(`${textPrompt}\n\nYour last reply was not valid JSON. Reply with JSON only, in exactly this shape: {"reply":"...","actions":[]}`, result.provider);
       const parsed = JSON.parse(retry.text);
       if (typeof parsed.reply === 'string') reply = parsed.reply;
       if (Array.isArray(parsed.actions)) actions = parsed.actions.slice(0, 5);
