@@ -1,6 +1,7 @@
 // Ankush's personal AI — server. Full stack, wired up:
 //   frontend (public/) + backend (this file) + SQLite database (db.js)
-//   + brain (brain.js: Gemini -> Groq -> Ollama) + tools (tools.js)
+//   + brain (brain.js: configurable provider chain — default Gemini -> Groq
+//     -> Ollama; OpenAI / Anthropic optional via keys in .env.local) + tools (tools.js)
 //   + OpenClaw gateway + goose coding agent (wired in /api/status, skills/goose.md)
 // Security (see SECURITY.md / scripts/security-check.sh for the test report):
 //   - binds 127.0.0.1 only, never 0.0.0.0; no CORS; security headers
@@ -202,11 +203,16 @@ app.get('/api/status', async (req, res) => {
   } catch {}
   res.json({
     ok: true,
-    brain_order: ['gemini-direct (gemini-3.6-flash -> gemini-3.5-flash-lite)', 'gemini-vm-helper', 'groq (openai/gpt-oss-120b)', `ollama (${brain.OLLAMA_MODEL})`],
+    // brain_order is the resolved chain for the next turn: BRAIN_PROVIDERS
+    // order (or the default order), with providers that have no key skipped.
+    // providers_configured reports only whether a key is set, never the key.
+    brain_order: brain.resolveOrder(),
     providers_configured: {
       gemini_direct: !!process.env.GEMINI_API_KEY,
       gemini_vm_helper: fs.existsSync(require('os').homedir() + '/workspace/custom-connectors/custom.gemini/bin/gemini.py'),
       groq: !!process.env.GROQ_API_KEY,
+      openai: !!process.env.OPENAI_API_KEY,
+      anthropic: !!process.env.ANTHROPIC_API_KEY,
       ollama_models: ollama || false,
     },
     openclaw_gateway_up: openclaw,
@@ -245,8 +251,8 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.post('/api/brain/test', async (req, res) => {
-  const provider = req.body?.provider; // gemini-direct | gemini-vm-helper | groq | ollama
-  const allowed = ['gemini-direct', 'gemini-vm-helper', 'groq', 'ollama'];
+  const provider = req.body?.provider; // gemini-direct | gemini-vm-helper | groq | openai | anthropic | ollama
+  const allowed = ['gemini-direct', 'gemini-vm-helper', 'groq', 'openai', 'anthropic', 'ollama'];
   if (provider && !allowed.includes(provider)) return res.status(400).json({ ok: false, error: 'unknown provider' });
   try {
     const r = await brain.ask('Reply with the word OK only.', provider);

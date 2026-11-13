@@ -13,7 +13,7 @@ grep -q '^node_modules/$' .gitignore; check $? "node_modules is in .gitignore"
 # 2. No real key committed in TRACKED files (values are never printed).
 #    .env.local / data / node_modules / logs are excluded — they are git-ignored
 #    by design and hold the local token / DB, never a committed secret.
-if grep -rE 'AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|ANKU_TOKEN=[0-9a-f]{10,}' \
+if grep -rE 'AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9]{20,}|ANKU_TOKEN=[0-9a-f]{10,}' \
     --exclude-dir=node_modules --exclude-dir=data --exclude='*.log' \
     --exclude='.env.local' --exclude='.env' . 2>/dev/null | grep -q .; then
   echo "FAIL: possible secret in tracked files (pattern match — check manually, values not shown)"; FAIL=1

@@ -19,7 +19,7 @@ async function loadStatus() {
     const s = await api('/api/status');
     document.getElementById('status').innerHTML =
       `Brain order: ${esc(s.brain_order.join(' → '))}<br>` +
-      `Gemini direct: ${s.providers_configured.gemini_direct} · Gemini VM helper: ${s.providers_configured.gemini_vm_helper} · Groq: ${s.providers_configured.groq} · Ollama: ${esc(JSON.stringify(s.providers_configured.ollama_models))}<br>` +
+      `Gemini direct: ${s.providers_configured.gemini_direct} · Gemini VM helper: ${s.providers_configured.gemini_vm_helper} · Groq: ${s.providers_configured.groq} · OpenAI: ${s.providers_configured.openai} · Anthropic: ${s.providers_configured.anthropic} · Ollama: ${esc(JSON.stringify(s.providers_configured.ollama_models))}<br>` +
       `OpenClaw gateway up: ${s.openclaw_gateway_up} · goose: ${esc(s.goose_version || 'not found')}<br>` +
       `DB — messages ${s.counts.messages} · jobs ${s.counts.jobs} · notes ${s.counts.notes} · approvals pending ${s.counts.approvals_pending}`;
   } catch (e) { document.getElementById('status').textContent = 'Status failed: ' + e.message + ' — is the token right?'; }

@@ -3,21 +3,22 @@
 **Owner:** Ankush Singh — BSc Computer Science, Scaler School of Technology, 2nd year, Bengaluru / Hyderabad, India.
 **Goal:** a personal AI that competes with ChatGPT and Muse — fast computer use, understands what the user wants and does it, on laptop + phone + cloud, works when the user is offline, $0 / free for Indian students/founders on WhatsApp. That gap is real: no exact laptop+phone+cloud $0 match exists. Build it for himself first, prove it, then sell the same system to other students/founders.
 
-**Status (12 Nov 2026, VM build):** full stack wired up and tested — see `tests/TEST-REPORT.md`. Frontend + backend + SQLite database + server, all working end-to-end, 16/16 tests passing on the first re-run (see below). OpenClaw gateway reinstalled (2026.11.3) and running; goose 1.59.0 installed.
+**Status (14 Nov 2026, VM build):** full stack wired up and tested — see `tests/TEST-REPORT.md`. Frontend + backend + SQLite database + server, all working end-to-end, 34/34 tests passing (22 live-server + 12 mocked provider unit tests). OpenClaw gateway reinstalled (2026.11.3) and running; goose 1.59.0 installed.
 
 ## What it is
 
 - **App (this folder):** Node 24 + Express + `node:sqlite` + static frontend. One server, one database, one UI — all wired up, no mocks.
   - `server.js` — backend: chat, tools, jobs, notes, approvals, audit, status
-  - `brain.js` — model providers, in order: Gemini free → Groq free → Ollama local
+  - `brain.js` — model providers, configurable chain: any API key the user supplies works (Gemini, Groq, OpenAI / OpenAI-compatible, Anthropic, Ollama local). Default order: Gemini free → Groq free → Ollama local; override with `BRAIN_PROVIDERS` in `.env.local`.
   - `tools.js` — deny-first tools: list/read files, write notes, edit files (with backup), web fetch (read-only), allowlisted shell commands
   - `db.js` — SQLite: messages, jobs, notes, approvals, audit_log
   - `public/` — frontend: chat, jobs, approvals, notes, status
 - **Bases (kept, credited, not copied as his own):** OpenClaw (MIT, gateway + phone channels) + goose (Apache-2.0, coding agent) + Ollama (MIT, local model). See `../research/personal-ai-laptop-phone-cloud-2026-11-11.md` for the full architecture, licences and sources.
 - **Brain order (tested for real, model named in every test):**
-  1. Gemini free — `gemini-3.5-flash-lite` first for routine turns (~500 req/day reported, unverified), `gemini-3.6-flash` next for hard turns. `gemini-2.5-flash` is 404, never used. `gemini-3.8-flash` tested 12 Nov 2026: **503 high demand** — not used until it answers.
+  1. Gemini free — `gemini-3.5-flash-lite` first for routine turns (~500 req/day reported, unverified), `gemini-3.6-flash` next for hard turns. `gemini-2.5-flash` is 404, never used. `gemini-3.8-flash` tested 12 Nov 2026: **503 high demand** — not used until it answers. Native function calling lives on this path (13 Nov 2026) — unit-tested, no live round-trip proven (no key on the VM).
   2. Groq free — `openai/gpt-oss-120b` (30 RPM / 1,000 req/day / 200k tok/day). Needs a free key Ankush creates himself — no key was created here, so Groq is **not tested yet**.
   3. Ollama local — `qwen3:8b` on the laptop (16 GB RAM), `qwen3:0.6b` on this VM only (too small for agent tool-calling — proven in `../tests/job4-gateway-local.md` / `job5-goose-hello-proof.md`).
+  4. **Any API key (Phase A, 14 Nov 2026):** `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL` for any OpenAI-compatible endpoint, `OPENAI_MODEL`) and `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_MODEL`, `ANTHROPIC_MAX_TOKENS`) plug into the same chain. Chain order via `BRAIN_PROVIDERS` (e.g. `gemini,openai,anthropic,groq,ollama`); providers with no key are skipped. Both new paths are **unit-tested-only** (mocked fetch, `tests/providers.test.js`) — **no live round-trip proven**, no key on the VM. They are optional; the $0 chain works without them. See `.env.example` for every variable.
 
 ## How it works — perceive → reason → act
 
@@ -41,9 +42,10 @@ On this VM: `bash tests/run-tests.sh` (starts the server, runs `node --test test
 
 ## Test it
 
-- `tests/test.js` — 16 real tests, live server, no mocks: health, auth (no/wrong token → 401), status, Gemini brain (gemini-3.6-flash, real call), Ollama brain (qwen3:0.6b, real call), chat end-to-end with SQLite persistence, tools (read/edit/web_fetch), cyber (path traversal, secret file, dangerous shell, send tool denied + approval does not execute), frontend served.
+- `tests/test.js` — 22 real tests, live server, no mocks: health, auth (no/wrong token → 401), status, Gemini brain (real call via VM helper), Ollama brain (real call), chat end-to-end with SQLite persistence, tools (read/edit/web_fetch), cyber (path traversal, secret file, dangerous shell, send tool denied + approval does not execute), frontend served, native function-calling declarations/parsing/agentLoop shape.
+- `tests/providers.test.js` — 12 unit tests, mocked fetch, no server: OpenAI + Anthropic request shapes, response parsing, `BRAIN_PROVIDERS` order/fallback, key handling (no key ever returned). These prove the code paths, NOT live round-trips.
 - `tests/TEST-REPORT.md` — what passed/failed, with model names and timings.
-- `scripts/security-check.sh` — 15 cyber checks, all passing on 12 Nov 2026 (npm audit skipped on this VM — audit endpoint unreachable, re-run on the laptop).
+- `scripts/security-check.sh` — 15 cyber checks, all passing on 14 Nov 2026 (npm audit skipped on this VM — audit endpoint unreachable, re-run on the laptop).
 
 ## Security — read SECURITY.md
 

@@ -1,8 +1,16 @@
-// Brain — model providers, in the order from the research file.
-// 1. Gemini free (primary) — gemini-3.6-flash, fallback gemini-3.5-flash-lite.
+// Brain — model providers. Any API key the user supplies works: providers
+// are a registry, and the chain order is configurable, so the brain is not
+// Gemini-only. Default order (unchanged from v1, from the research file):
+// 1. Gemini free (primary) — gemini-3.5-flash-lite first, gemini-3.6-flash next.
 //    gemini-2.5-flash is 404 for new users — never used.
 // 2. Groq free (fallback) — openai/gpt-oss-120b, 30 RPM / 1,000 req/day / 200k tok/day.
 // 3. Ollama local (offline fallback) — qwen3:8b on the laptop, qwen3:0.6b on this VM.
+// Optional providers, used only when the user supplies a key in .env.local:
+// 4. OpenAI API, or ANY OpenAI-compatible endpoint (OPENAI_BASE_URL) — model
+//    via OPENAI_MODEL. 5. Anthropic API — model via ANTHROPIC_MODEL.
+// Order is configurable: BRAIN_PROVIDERS=gemini,openai,anthropic,groq,ollama
+// (comma-separated; unknown names ignored; providers with no key are skipped).
+// Unset BRAIN_PROVIDERS keeps the default order above.
 // VM-only test adapter: if no GEMINI_API_KEY is set, the server may call the
 // Muse Gemini helper (~/workspace/custom-connectors/custom.gemini/bin/gemini.py)
 // as a subprocess. That helper holds the key in the registered connection, never
@@ -10,6 +18,10 @@
 // is used, with the key in .env.local (git-ignored).
 // Every call returns { text, model, provider } so the caller can log exactly
 // which model actually answered. No key is ever logged or returned.
+// HONEST STATUS (14 Nov 2026): the OpenAI and Anthropic paths are
+// unit-tested-only (mocked fetch, tests/providers.test.js) — no live key
+// exists on this VM, so no live round-trip is proven for either. The
+// live-verified paths remain the Gemini VM helper and Ollama.
 'use strict';
 const { execFile, spawn } = require('child_process');
 const fs = require('fs');
@@ -31,8 +43,9 @@ const OLLAMA_HOST = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replac
 const GEMINI_HELPER = path.join(os.homedir(), 'workspace/custom-connectors/custom.gemini/bin/gemini.py');
 
 // Native function calling (Gemini direct only, 13 Nov 2026).
-// The VM helper, Groq and Ollama paths return text only — the server's
-// JSON fallback handles those. These declarations mirror tools.js exactly:
+// The VM helper, Groq, OpenAI, Anthropic and Ollama paths return text only —
+// the server's JSON fallback handles those. These declarations mirror
+// tools.js exactly:
 // every declared function must be an allowlisted tool, and no
 // send/post/spend/delete tool is ever declared. All deny-first checks stay
 // in tools.execute — this list only tells the model what it may ask for.
@@ -148,6 +161,44 @@ async function groq(prompt) {
   return { text, model: GROQ_MODEL, provider: 'groq' };
 }
 
+async function openaiChat(prompt) {
+  // OpenAI API, or ANY OpenAI-compatible endpoint. The user supplies the key
+  // (OPENAI_API_KEY) and optionally a base URL (OPENAI_BASE_URL) and model
+  // (OPENAI_MODEL). Default model is a cheap small model; override it with
+  // OPENAI_MODEL to whatever the key's account supports. Text-only: the
+  // server's JSON fallback handles tool use on this path. Unit-tested-only
+  // (mocked fetch) — no live round-trip proven, no key on this VM.
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('no OPENAI_API_KEY');
+  const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const data = await postJson(`${base}/chat/completions`,
+    { model, temperature: 0.2, messages: [{ role: 'user', content: prompt }] },
+    { Authorization: `Bearer ${key}` });
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('empty OpenAI-compatible response');
+  return { text, model, provider: 'openai' };
+}
+
+async function anthropicChat(prompt) {
+  // Anthropic Messages API. Key via ANTHROPIC_API_KEY, model via
+  // ANTHROPIC_MODEL, output cap via ANTHROPIC_MAX_TOKENS (required by the
+  // API). Text-only: the server's JSON fallback handles tool use on this
+  // path. Unit-tested-only (mocked fetch) — no live round-trip proven.
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('no ANTHROPIC_API_KEY');
+  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5';
+  const maxTokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 1024);
+  const data = await postJson('https://api.anthropic.com/v1/messages',
+    { model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] },
+    { 'x-api-key': key, 'anthropic-version': '2023-06-01' });
+  const text = (data?.content || [])
+    .filter(b => b?.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text).join('');
+  if (!text) throw new Error('empty Anthropic response');
+  return { text, model, provider: 'anthropic' };
+}
+
 async function ollama(prompt) {
   const data = await postJson(`${OLLAMA_HOST}/api/chat`, {
     model: OLLAMA_MODEL, stream: false,
@@ -159,19 +210,79 @@ async function ollama(prompt) {
   return { text, model: OLLAMA_MODEL, provider: 'ollama' };
 }
 
+// Provider registry. Every provider exposes chat(prompt) returning
+// { text, model, provider }. needsKey names the env var a key must come
+// from — providers with no key are skipped by resolveOrder(), never
+// attempted. Keys are read from process.env at call time, never logged,
+// never returned. `available` is an extra gate (the VM helper only exists
+// on this VM). Adding a provider means one entry here + one chat function
+// + docs — the chain, the fallback, and the status endpoint pick it up.
+const PROVIDERS = {
+  'gemini-direct': { needsKey: 'GEMINI_API_KEY', chat: geminiDirect },
+  'gemini-vm-helper': { needsKey: null, available: () => fs.existsSync(GEMINI_HELPER), chat: geminiViaHelperChain },
+  groq: { needsKey: 'GROQ_API_KEY', chat: groq },
+  openai: { needsKey: 'OPENAI_API_KEY', chat: openaiChat },
+  anthropic: { needsKey: 'ANTHROPIC_API_KEY', chat: anthropicChat },
+  ollama: { needsKey: null, chat: ollama },
+};
+const DEFAULT_ORDER = ['gemini-direct', 'gemini-vm-helper', 'groq', 'ollama'];
+
+function normalizeProvider(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (n === 'gemini') return 'gemini-direct';
+  return n;
+}
+
+// Resolve the provider chain for this turn: BRAIN_PROVIDERS if set,
+// otherwise the default order. Unknown names are ignored, duplicates are
+// dropped, providers with no key (or an unavailable helper) are skipped.
+// Returns provider names only — never keys, never availability reasons.
+function resolveOrder() {
+  const raw = (process.env.BRAIN_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const names = raw.length ? raw : [...DEFAULT_ORDER];
+  const seen = new Set();
+  const order = [];
+  for (const rawName of names) {
+    const name = normalizeProvider(rawName);
+    const p = PROVIDERS[name];
+    if (!p || seen.has(name)) continue;
+    seen.add(name);
+    if (p.needsKey && !process.env[p.needsKey]) continue;
+    if (p.available && !p.available()) continue;
+    order.push(name);
+  }
+  return order;
+}
+
 // Try providers in order. Returns { text, model, provider, tried: [...] }.
-// `only` restricts to one provider (used by the test endpoints).
+// `tried` lists only providers actually attempted. `only` restricts to one
+// provider (used by the test endpoints) and attempts it even with no key,
+// so a missing key surfaces as that provider's own error.
 async function ask(prompt, only) {
   const tried = [];
-  const chain = only ? [only] : ['gemini-direct', 'gemini-vm-helper', 'groq', 'ollama'];
-  const fns = { 'gemini-direct': geminiDirect, 'gemini-vm-helper': geminiViaHelperChain, groq, ollama };
+  if (only) {
+    const name = normalizeProvider(only);
+    const p = PROVIDERS[name];
+    if (!p) throw new Error(`unknown provider: ${only}`);
+    tried.push(name);
+    try {
+      const r = await p.chat(prompt);
+      return { ...r, tried };
+    } catch (e) {
+      throw new Error(`all brain providers failed (tried: ${tried.join(', ')}): ${e.message}`);
+    }
+  }
+  const chain = resolveOrder();
+  if (chain.length === 0) {
+    throw new Error('no brain providers available — set an API key in .env.local (GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY) or check BRAIN_PROVIDERS, or start Ollama');
+  }
   for (const name of chain) {
     tried.push(name);
     try {
-      const r = await fns[name](prompt);
+      const r = await PROVIDERS[name].chat(prompt);
       return { ...r, tried };
     } catch (e) {
-      // record and fall through to the next free provider — never stop
+      // record and fall through to the next provider — never stop
       // eslint-disable-next-line no-unused-vars
       const _err = e.message;
     }
@@ -239,4 +350,4 @@ async function ollamaReachable() {
   } catch { return false; }
 }
 
-module.exports = { ask, agentLoop, parseGeminiResponse, TOOL_DECLARATIONS, ollamaReachable, GEMINI_MODELS, GROQ_MODEL, OLLAMA_MODEL };
+module.exports = { ask, agentLoop, parseGeminiResponse, TOOL_DECLARATIONS, ollamaReachable, GEMINI_MODELS, GROQ_MODEL, OLLAMA_MODEL, resolveOrder };

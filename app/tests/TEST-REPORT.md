@@ -1,6 +1,13 @@
 # TEST-REPORT — Ankush's Personal AI app (full stack, wired up)
 
-## Latest run — 13 Nov 2026, ~19:30 IST (this VM)
+## Latest run — 14 Nov 2026, ~00:30 IST (this VM)
+- Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js tests/providers.test.js`, stops it)
+- Node: v24.22.1, Express 5.3.0, Ollama 0.40.16 (binary reinstalled to `~/ollama` this session — the VM replacement had wiped it; the qwen3:0.6b model blobs survived in `~/.ollama`)
+- **Result: 34 passed, 0 failed, 0 skipped, exit 0, 22.9 s** (22 live-server tests + 12 mocked provider unit tests)
+
+New in this run: Phase A multi-provider brain (Ankush's 14 Nov direction — any API key works, not Gemini-only). `brain.js` is now a provider registry with configurable chain order (`BRAIN_PROVIDERS`, providers with no key skipped); new `openai` provider (OpenAI API + any OpenAI-compatible base URL) and `anthropic` provider (Messages API), keys from env only. New tests #23–34 (`tests/providers.test.js`, mocked fetch): request shapes, response parsing, chain order/fallback, key handling, no-key-leak checks, agentLoop fallback to the configured chain. **The OpenAI/Anthropic paths are unit-tested-only — no live round-trip proven, no key on this VM.** Live-verified paths remain the Gemini VM helper (gemini-3.5-flash-lite) and Ollama (qwen3:0.6b, 17.1 s this run). Deny-first tools, native Gemini function calling, and the JSON fallback are unchanged and still passing. Security checks re-run same session: **ALL PASS** (15 checks; npm audit skipped — endpoint unreachable from this VM, as before; secret scan extended with Anthropic/OpenAI key patterns).
+
+## Earlier run — 13 Nov 2026, ~19:30 IST (this VM)
 - Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js`, stops it)
 - Node: v24.22.1, Express 5.3.0
 - **Result: 22 passed, 0 failed, 0 skipped, exit 0, 17.2 s**
@@ -58,6 +65,7 @@ New in this run vs the 17-test run: audit Medium fixes — Gemini key now sent v
 ## Model tests — what was actually used
 - **Gemini:** `gemini-3.5-flash-lite` (primary, Lite-first) and `gemini-3.6-flash` (fallback) — both answered for real via the connected Gemini API helper. `gemini-3.8-flash` tested 12 Nov: **503 high demand** (same as 10 Nov) — not used. `gemini-2.5-flash`: 404, never used.
 - **Groq:** NOT tested — no free key was created (Ankush creates it himself at console.groq.com, no card). Code path exists in `brain.js`, provider `groq`, model `openai/gpt-oss-120b`.
+- **OpenAI / Anthropic:** NOT live-tested — no key exists on this VM. Code paths exist in `brain.js` (providers `openai`, `anthropic`), covered by mocked-fetch unit tests only (`tests/providers.test.js`). Test on the laptop with `POST /api/brain/test {"provider":"openai"}` / `{"provider":"anthropic"}` once a key is in `.env.local`.
 - **Ollama:** `qwen3:0.6b` on this VM — answers short prompts in 12–25 s, too small for agent tool-calling (proven 11 Nov). Laptop model is `qwen3:8b` (or `qwen3-coder:30b` per efficiency research, if RAM allows).
 - **OpenCode 1.19.5:** installed, CLI works (`--version` → 1.19.5). A run with `ollama/qwen3:0.6b` produced no output in 90 s on this VM — same limit as goose, needs 8B/Gemini on the laptop.
 - **OpenClaw 2026.11.3:** reinstalled, gateway dashboard HTTP 200 on 127.0.0.1:18789. Agent turns with `qwen3:0.6b` cannot complete on this VM (~15k-token base prompt, CPU prefill ~5 min, idle timeout) — proven 11 Nov, see `../tests/job4-gateway-local.md`. Laptop (16 GB, qwen3:8b, Gemini brain) should do it in 1–2 min.
@@ -67,4 +75,5 @@ New in this run vs the 17-test run: audit Medium fixes — Gemini key now sent v
 
 ## What is NOT yet proven
 - Native function calling live end-to-end (needs GEMINI_API_KEY on the laptop — direct REST path; parser + declarations are unit-tested and the fallback is proven live, but no live functionCall round-trip has run yet).
+- OpenAI / Anthropic live round-trips (unit-tested with mocked fetch only; need a key on the laptop).
 - Groq fallback (no key), Telegram/WhatsApp phone loop (needs Ankush's bot token / spare number), Oracle cloud 7-day uptime (Phase 6, after Phase 5), OpenClaw agent turn with Gemini brain (needs his key on the laptop), OpenCode/goose coding job with qwen3:8b/Gemini (needs the laptop model).

@@ -1,7 +1,7 @@
 # Personal AI — laptop setup guide (Phase 0–2)
 
 **Owner:** Ankush Singh · **Cost:** $0 — no paid signups, no spending, no Connects.
-**Stack:** OpenClaw (gateway) + goose (coding agent) · Brain order: Gemini free → Groq free → Ollama local (qwen3:8b).
+**Stack:** OpenClaw (gateway) + goose (coding agent) · Brain order: Gemini free → Groq free → Ollama local (qwen3:8b). Any API key works — OpenAI and Anthropic are optional extras via `.env.local` (see "Any API key" below); the $0 chain needs no paid key.
 **Status:** built and tested on the Muse VM on 11 Nov 2026. See `tests/` for the evidence.
 The VM is weaker than a laptop (1.5 shared CPUs, 6 GB cgroup RAM) — anything that was
 slow or blocked there is flagged below with the laptop expectation.
@@ -82,6 +82,36 @@ Put your Gemini key in `.env.local` as `GEMINI_API_KEY=...` (secure form only).
 Working model names, verified 10–11 Nov 2026: **`gemini-3.6-flash`**,
 **`gemini-3.5-flash-lite`**. `gemini-2.5-flash` is gone for new users (404).
 `gemini-3.8-flash` returned 503 (high demand) on 10 Nov.
+
+### Any API key (Phase A, 14 Nov 2026) — optional, $0 chain unchanged
+
+The brain is a provider chain, not Gemini-only. Any of these keys can be added
+to `.env.local` (git-ignored, never paste a key in chat). Providers with no key
+are skipped automatically; the $0 chain (Gemini free → Groq free → Ollama
+local) keeps working with none of these set.
+
+```text
+OPENAI_API_KEY=       # only if you already have an OpenAI key
+OPENAI_BASE_URL=      # optional, default https://api.openai.com/v1 — set to ANY
+                      # OpenAI-compatible endpoint (a local server, another
+                      # provider that speaks the chat-completions format)
+OPENAI_MODEL=         # optional, default gpt-4o-mini — set to whatever your
+                      # key's account supports
+ANTHROPIC_API_KEY=    # only if you already have an Anthropic key
+ANTHROPIC_MODEL=      # optional, default claude-haiku-4-5
+ANTHROPIC_MAX_TOKENS= # optional, default 1024 (the Anthropic API requires it)
+BRAIN_PROVIDERS=      # optional chain order, comma-separated, e.g.
+                      # gemini,openai,anthropic,groq,ollama — unset means the
+                      # default order (gemini-direct, gemini-vm-helper, groq,
+                      # ollama). Unknown names are ignored.
+```
+
+Honest status: the OpenAI and Anthropic paths are unit-tested with mocked
+responses only — no live key exists on the build VM, so no live round-trip is
+proven for either. Test yours on the laptop with
+`POST /api/brain/test {"provider":"openai"}` (or `"anthropic"`) once the key
+is in `.env.local`. Native function calling exists only on the Gemini direct
+path today; the other providers use the JSON-text fallback.
 
 ## Step 3 — OpenClaw (gateway)
 
@@ -187,7 +217,7 @@ Do this only after the 5 jobs pass on the laptop:
 ## What still needs Ankush
 
 - Run this guide on his Windows laptop (Muse cannot reach it).
-- His Gemini key (secure form only) and, later, a Groq key (free tier) if he wants the fallback.
+- His Gemini key (secure form only) and, later, a Groq key (free tier) if he wants the fallback. OpenAI / Anthropic keys are optional extras, only if he already has them — never required, never a paid signup for this project.
 - Telegram bot token (Phase 4) — he creates it via @BotFather.
 - A spare phone number for WhatsApp (Phase 4, later) — never his primary.
 - Oracle Cloud account (Phase 6) — only after 5 laptop jobs pass.

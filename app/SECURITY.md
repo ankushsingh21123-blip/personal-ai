@@ -19,4 +19,4 @@ A personal agent with shell + files + web + phone access can send, spend, delete
 Send, post, spend, delete originals, change access, share credentials, approve security/admin/OTP prompts, bypass bot checks / Cloudflare / YouTube AI rules — all Ankush-only, or draft-first with his yes.
 
 ## If a key ever leaks
-Rotate it immediately (Google AI Studio / Groq console), check `audit_log` in the SQLite DB, and tell Ankush which key and when.
+Rotate it immediately (that provider's own console — Google AI Studio, Groq, OpenAI, or Anthropic), check `audit_log` in the SQLite DB, and tell Ankush which key and when.
