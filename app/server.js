@@ -39,6 +39,19 @@ process.env.PATH = `${require('os').homedir()}/.local/bin:${require('os').homedi
 const { all, get, run } = require('./db');
 const brain = require('./brain');
 const tools = require('./tools');
+// Phases B–E (14 Nov 2026): screen vision + desktop control, phone,
+// offline queue + sync, routines, browser use, messaging channels.
+const freeze = require('./freeze');
+const queue = require('./queue');
+const routines = require('./routines');
+const sync = require('./sync');
+const vision = require('./vision');
+const screen = require('./screen');
+const desktop = require('./desktop');
+const phone = require('./phone');
+const browserMod = require('./browser');
+const { TelegramBot } = require('./telegram');
+const whatsapp = require('./whatsapp');
 
 // --- .env.local (git-ignored) ------------------------------------------------
 const ENV_PATH = path.join(__dirname, '.env.local');
@@ -217,6 +230,17 @@ app.get('/api/status', async (req, res) => {
     },
     openclaw_gateway_up: openclaw,
     goose_version: goose || 'not found',
+    frozen: freeze.freezeState(),
+    queue: queue.counts(),
+    routines: { total: get('SELECT COUNT(*) c FROM routines').c, enabled: get('SELECT COUNT(*) c FROM routines WHERE enabled = 1').c },
+    phone_session: phone.sessionState(),
+    capabilities: {
+      screen_capture: screen.capability(),
+      desktop_agent: desktop.capability(),
+      browser: browserMod.capability(),
+      telegram: new TelegramBot().status(),
+      whatsapp: whatsapp.status(),
+    },
     counts: {
       messages: get('SELECT COUNT(*) c FROM messages').c,
       jobs: get('SELECT COUNT(*) c FROM jobs').c,
@@ -306,10 +330,247 @@ app.post('/api/approvals/:id/decide', (req, res) => {
 
 app.get('/api/audit', (req, res) => res.json({ ok: true, audit: all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100') }));
 
+// --- freeze: the instant stop control ---------------------------------------
+app.get('/api/freeze', (req, res) => res.json({ ok: true, ...freeze.freezeState() }));
+app.post('/api/freeze', (req, res) => {
+  const frozen = req.body?.frozen;
+  if (typeof frozen !== 'boolean') return res.status(400).json({ ok: false, error: 'frozen must be a boolean' });
+  res.json({ ok: true, ...freeze.setFrozen(frozen, req.body?.reason) });
+});
+
+// --- offline queue (Phase D) -------------------------------------------------
+app.get('/api/queue', (req, res) => res.json({ ok: true, counts: queue.counts(), items: queue.list(50) }));
+app.post('/api/queue', (req, res) => {
+  const { kind, payload, maxAttempts } = req.body || {};
+  try {
+    const id = queue.enqueue(kind, payload || {}, { maxAttempts });
+    res.json({ ok: true, outbox_id: id, status: 'pending' });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+// Default outbox worker: dispatches queued kinds to the real handlers.
+// brain_call / web_fetch run through the same deny-first paths as a chat
+// turn. sync_push needs SYNC_PEER_URL + SYNC_TOKEN (the cloud node behind
+// Tailscale) — without them it fails visibly and retries, then goes dead.
+async function defaultOutboxWorker(kind, payload) {
+  if (kind === 'brain_call') {
+    const r = await brain.ask(String(payload.prompt || ''), payload.only);
+    run('INSERT INTO jobs (task, status, model, provider, evidence) VALUES (?, ?, ?, ?, ?)',
+      `[queued brain_call] ${String(payload.prompt || '').slice(0, 400)}`, 'done', r.model, r.provider, JSON.stringify({ text: r.text.slice(0, 2000) }));
+    return r;
+  }
+  if (kind === 'web_fetch') {
+    const out = await tools.execute('web_fetch', { url: payload.url });
+    run('INSERT INTO jobs (task, status, evidence) VALUES (?, ?, ?)', `[queued web_fetch] ${payload.url}`, 'done', JSON.stringify(out).slice(0, 2000));
+    return out;
+  }
+  if (kind === 'sync_push') {
+    const peer = process.env.SYNC_PEER_URL;
+    const token = process.env.SYNC_TOKEN;
+    if (!peer || !token) throw new Error('no sync peer configured — set SYNC_PEER_URL + SYNC_TOKEN (cloud node behind Tailscale)');
+    const records = sync.recordsSince(payload.since || null);
+    const r = await fetch(peer.replace(/\/$/, '') + '/api/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Anku-Token': token },
+      body: JSON.stringify({ device_id: sync.thisDeviceId(), records }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) throw new Error(`sync peer HTTP ${r.status}`);
+    return r.json();
+  }
+  if (kind === 'routine_run') {
+    const routine = routines.getRoutine(Number(payload.routine_id));
+    if (!routine) throw new Error('routine not found');
+    return routines.runRoutine(routine, routineRunner);
+  }
+  if (kind === 'notify') {
+    const r = run('INSERT INTO notes (title, body) VALUES (?, ?)', String(payload.title || 'notification').slice(0, 200), String(payload.body || '').slice(0, 5000));
+    return { note_id: Number(r.lastInsertRowid) };
+  }
+  throw new Error(`no worker for outbox kind: ${kind}`);
+}
+app.post('/api/queue/drain', async (req, res) => {
+  const limit = Number(req.body?.limit || 10);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) return res.status(400).json({ ok: false, error: 'limit must be an integer 1..50' });
+  const result = await queue.drain(defaultOutboxWorker, { limit });
+  res.json({ ok: true, ...result });
+});
+
+// --- routines (Phase E) -------------------------------------------------------
+async function routineRunner(task, scope) {
+  const turn = await agentTurn(task + (scope ? `\nScope: ${scope}` : ''));
+  return { reply: turn.reply, model: turn.model, provider: turn.provider, actions: turn.actions };
+}
+app.get('/api/routines', (req, res) => res.json({ ok: true, routines: routines.listRoutines() }));
+app.post('/api/routines', (req, res) => {
+  try {
+    const r = routines.createRoutine(req.body || {});
+    res.json({ ok: true, routine: r });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.patch('/api/routines/:id', (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'enabled must be a boolean' });
+  try { res.json({ ok: true, routine: routines.setEnabled(Number(req.params.id), enabled) }); }
+  catch (e) { res.status(404).json({ ok: false, error: e.message }); }
+});
+app.delete('/api/routines/:id', (req, res) => {
+  try { res.json({ ok: true, ...routines.deleteRoutine(Number(req.params.id)) }); }
+  catch (e) { res.status(404).json({ ok: false, error: e.message }); }
+});
+app.post('/api/routines/:id/run', async (req, res) => {
+  const routine = routines.getRoutine(Number(req.params.id));
+  if (!routine) return res.status(404).json({ ok: false, error: 'routine not found' });
+  const out = await routines.runRoutine(routine, routineRunner, { dryRun: req.body?.dry_run === true });
+  res.json({ ok: true, ...out });
+});
+app.get('/api/routines/:id/runs', (req, res) => {
+  const routine = routines.getRoutine(Number(req.params.id));
+  if (!routine) return res.status(404).json({ ok: false, error: 'routine not found' });
+  res.json({ ok: true, runs: routines.listRuns(routine.id) });
+});
+
+// --- screen vision + desktop control (Phase B) -------------------------------
+app.post('/api/screen/capture', async (req, res) => {
+  try {
+    const shot = await screen.captureScreenshot();
+    res.json({ ok: true, hash: shot.hash, width: shot.width, height: shot.height, mimeType: shot.mimeType, imageBase64: shot.buffer.toString('base64') });
+  } catch (e) { res.status(503).json({ ok: false, error: e.message }); }
+});
+app.post('/api/screen/act', async (req, res) => {
+  try {
+    const client = new desktop.DesktopAgentClient({});
+    const out = await client.act(req.body?.action || {}, { approvalId: req.body?.approval_id });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+});
+app.post('/api/screen/loop', async (req, res) => {
+  const task = typeof req.body?.task === 'string' ? req.body.task.trim() : '';
+  if (!task || task.length > 4000) return res.status(400).json({ ok: false, error: 'task required, max 4000 chars' });
+  const client = new desktop.DesktopAgentClient({});
+  try {
+    const out = await desktop.screenLoop(task, {
+      capture: async () => {
+        // Prefer the desktop agent's screenshot; fall back to local capture.
+        try {
+          const s = await client.screenshot();
+          const buf = Buffer.from(s.imageBase64, 'base64');
+          return { buffer: buf, hash: screen.hashBuffer(buf) };
+        } catch {
+          return screen.captureScreenshot();
+        }
+      },
+      ground: async (t, imageBase64) => (await vision.groundAction(t, imageBase64, 'image/png')).action,
+      act: (a) => client.act(a, { approvalId: req.body?.approval_id }),
+    }, { maxActions: req.body?.max_actions, approvalId: req.body?.approval_id });
+    run('INSERT INTO jobs (task, status, model, provider, evidence) VALUES (?, ?, ?, ?, ?)',
+      `[screen loop] ${task}`.slice(0, 500), out.done ? 'done' : 'stopped', null, null, JSON.stringify({ stopReason: out.stopReason, steps: out.steps, latencies: out.latencies }).slice(0, 5000));
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(503).json({ ok: false, error: e.message }); }
+});
+
+// --- phone (Phase C) -----------------------------------------------------------
+app.get('/api/phone', async (req, res) => {
+  const driver = new phone.AdbDriver({});
+  res.json({ ok: true, android: await driver.capability(), ios: phone.IOS, session: phone.sessionState() });
+});
+app.post('/api/phone/enable', (req, res) => {
+  try { res.json({ ok: true, session: phone.enableSession({ ttlMs: req.body?.ttl_ms, reason: req.body?.reason }) }); }
+  catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.post('/api/phone/disable', (req, res) => res.json({ ok: true, session: phone.disableSession() }));
+app.post('/api/phone/act', async (req, res) => {
+  try {
+    const driver = new phone.AdbDriver({});
+    const r = await driver.run(req.body?.action || {});
+    const stdout = Buffer.isBuffer(r.stdout) ? r.stdout.toString('base64') : String(r.stdout || '');
+    res.json({ ok: true, stdout_base64: stdout.slice(0, 20000) });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+});
+
+// --- browser use ---------------------------------------------------------------
+app.get('/api/browser', (req, res) => res.json({ ok: true, ...browserMod.capability() }));
+app.post('/api/browser/act', async (req, res) => {
+  const agent = new browserMod.BrowserAgent({});
+  try {
+    const out = await agent.act(req.body?.action || {});
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+  finally { await agent.close(); }
+});
+
+// --- sync (Phase D) -------------------------------------------------------------
+app.post('/api/sync/push', (req, res) => {
+  const { device_id, records } = req.body || {};
+  if (typeof device_id !== 'string' || !device_id || !records || typeof records !== 'object') {
+    return res.status(400).json({ ok: false, error: 'device_id and records required' });
+  }
+  const result = sync.mergeIncoming(records, device_id.slice(0, 100));
+  res.json({ ok: true, ...result });
+});
+app.get('/api/sync/pull', (req, res) => {
+  const since = typeof req.query.since === 'string' ? req.query.since : null;
+  res.json({ ok: true, device_id: sync.thisDeviceId(), records: sync.recordsSince(since) });
+});
+app.get('/api/sync/conflicts', (req, res) => res.json({ ok: true, conflicts: sync.listConflicts(50) }));
+
+// --- messaging channels: status only (Telegram polls inside the server when
+// a token exists; WhatsApp starts manually — QR scan, spare number only) -------
+app.get('/api/channels', (req, res) => res.json({
+  ok: true,
+  telegram: telegramBot ? telegramBot.status() : new TelegramBot().status(),
+  whatsapp: whatsapp.status(),
+}));
+
 app.use((err, req, res, next) => res.status(400).json({ ok: false, error: 'bad request' }));
+
+// --- scheduler: routines tick + outbox drain, every 60s ----------------------
+// No-ops when there are no routines and an empty outbox. Disabled with
+// DISABLE_SCHEDULER=1 (tests / debugging). Both respect freeze.
+let schedulerTimer = null;
+if (process.env.DISABLE_SCHEDULER !== '1') {
+  schedulerTimer = setInterval(async () => {
+    try { await routines.tick(routineRunner); } catch (e) { console.error('[personal-ai] routine tick failed:', e.message); }
+    try { await queue.drain(defaultOutboxWorker, { limit: 10 }); } catch (e) { console.error('[personal-ai] queue drain failed:', e.message); }
+  }, 60000);
+  schedulerTimer.unref();
+}
+
+// --- Telegram bot (phone-as-remote): polls only when a token exists ---------
+let telegramBot = null;
+if (process.env.TELEGRAM_ENABLED !== 'no') {
+  const bot = new TelegramBot({
+    handlers: {
+      onMessage: async (text) => {
+        const turn = await agentTurn(text);
+        run('INSERT INTO messages (role, content, model, provider) VALUES (?, ?, ?, ?)', 'assistant', turn.reply, turn.model, turn.provider);
+        return turn.reply;
+      },
+      getStatus: async () => ({
+        brain_order: brain.resolveOrder(),
+        frozen: freeze.isFrozen(),
+        queue: queue.counts(),
+        approvals_pending: get("SELECT COUNT(*) c FROM approvals WHERE status='pending'").c,
+      }),
+      decideApproval: async (id, status) => {
+        const row = get('SELECT * FROM approvals WHERE id = ?', id);
+        if (!row) return { error: 'approval not found' };
+        run("UPDATE approvals SET status = ?, decided_at = datetime('now') WHERE id = ?", status, id);
+        return { ok: true };
+      },
+      setFrozen: (frozen, reason) => freeze.setFrozen(frozen, reason),
+      freezeState: () => freeze.freezeState(),
+    },
+  });
+  if (bot.enabled) {
+    telegramBot = bot;
+    try { bot.start(); console.log('[personal-ai] telegram bot polling started'); }
+    catch (e) { console.error('[personal-ai] telegram bot failed to start:', e.message); }
+  }
+}
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`[personal-ai] listening on http://${HOST}:${PORT} (loopback only)`);
   console.log(`[personal-ai] workspace: ${tools.WORKSPACE}`);
 });
-module.exports = { app, server };
+module.exports = { app, server, agentTurn, routineRunner, defaultOutboxWorker, schedulerTimer, telegramBot };

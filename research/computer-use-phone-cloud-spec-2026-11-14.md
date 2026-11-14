@@ -2,7 +2,7 @@
 
 **Owner:** Ankush Singh — BSc CS, Scaler School of Technology, Bengaluru / Hyderabad
 **Date:** 14 Nov 2026
-**Status:** SPEC ONLY. Nothing in Phases B–E is built yet. Phase A (multi-provider brain) is the only slice implemented with this spec — see `app/brain.js` and `app/tests/providers.test.js`.
+**Status:** BUILT 14 Nov 2026. Phase A (multi-provider brain) was implemented 14 Nov; Phases B–E were built the same day from this spec — see `app/vision.js`, `app/screen.js`, `app/desktop.js`, `app/desktop-agent.js`, `app/phone.js`, `app/telegram.js`, `app/whatsapp.js`, `app/browser.js`, `app/queue.js`, `app/sync.js`, `app/routines.js`, `app/freeze.js`, and `app/tests/phases.test.js` (71/71 tests pass). Honest status, unchanged from §2: the live paths for vision, desktop-agent execution, ADB control, Telegram/WhatsApp, two-node sync, and external browser `goto` are UNPROVEN on the VM (no key / desktop / phone / second node / Chromium-capable egress here) — see `app/tests/TEST-REPORT.md` for exactly what was observed live and what was unit-tested with mocks. Nothing in this repo claims otherwise.
 **Rule:** **$0 for everything.** No paid signups, no spending. Providers that need a paid key are optional — the $0 path (Gemini free → Groq free → Ollama local) always stays working without them.
 
 ---
@@ -53,7 +53,7 @@ These are stated plainly because the direction contains claims no honest build c
 - **Honest status:** the OpenAI and Anthropic paths are **unit-tested-only** (mocked fetch in `app/tests/providers.test.js`). No live key exists on this VM, so **no live round-trip is proven** for either. Gemini direct native function calling is likewise unproven live (no key on the VM) — the live-verified paths remain the Gemini VM helper and Ollama. Do not claim otherwise.
 - **Follow-up (Phase A2, not built):** native function calling for the OpenAI-compatible and Anthropic providers (tool schemas + tool-call loop in `agentLoop`), so every provider can act natively instead of through the JSON-text fallback. The provider interface is shaped for it (`chat()` today, `generateWithTools()` later); the deny-first executor stays the single gate either way.
 
-### Phase B — Screen vision + desktop control (SPEC ONLY — not built)
+### Phase B — Screen vision + desktop control (BUILT 14 Nov 2026 — live execution unproven, needs the laptop)
 
 **Goal:** the agent sees the laptop screen, reads it, and acts on it — Codex-style computer use on the user's own desktop.
 
@@ -64,7 +64,7 @@ These are stated plainly because the direction contains claims no honest build c
 - **Speed design (per §2.1):** routine actions use the fast local model and short prompts; the frontier model is called only to plan, to recover, or to judge completion. No claim of beating frontier latency — the win is fewer frontier calls per task.
 - **Safety gates (non-negotiable):** no credential/OTP/admin automation; destructive actions need approval; a visible on-screen indicator while the agent is controlling the desktop; a single keystroke / button that freezes the agent instantly.
 
-### Phase C — Phone control (SPEC ONLY — not built)
+### Phase C — Phone control (BUILT 14 Nov 2026 — live control unproven, needs his phone)
 
 **Goal:** the same agent, on the phone — see the phone screen, act on it, and keep working when the phone is the device in hand.
 
@@ -73,7 +73,7 @@ These are stated plainly because the direction contains claims no honest build c
 - **Phone-as-remote (first, before full control):** the phone already works as the control surface for the laptop/cloud agent via Telegram (Phase 4 in `SETUP.md`) — chat the agent, approve actions, see job status. Full phone *control* (Phase C) builds on top of that; it does not replace it.
 - **Presence rule (Ankush's own rule, 11 Nov 2026):** phone access only when needed and only when the user allows it. The phone agent must be explicitly enabled per session, with a visible indicator while active, and must stop the moment the user takes the phone.
 
-### Phase D — Offline queue + cloud sync (SPEC ONLY — not built)
+### Phase D — Offline queue + cloud sync (BUILT 14 Nov 2026 — queue proven live, two-node sync unproven)
 
 **Goal:** the work does not stop when the connection drops; devices stay in sync when it returns.
 
@@ -83,7 +83,7 @@ These are stated plainly because the direction contains claims no honest build c
 - **Cloud node:** Oracle Always Free (or any $0 VPS the user already has), running the same app behind Tailscale (private network, no public exposure). Honest bound per §2.3: capacity/reclaim risk is real; the system must keep working with the cloud node down, and say so in the UI when it is.
 - **Status honesty:** the UI always shows which providers are reachable, whether the device is offline, and how many jobs are queued. No silent degradation.
 
-### Phase E — Routines (SPEC ONLY — not built)
+### Phase E — Routines (BUILT 14 Nov 2026 — proven live)
 
 **Goal:** recurring jobs the user defines once and the agent runs on schedule, across devices.
 

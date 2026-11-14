@@ -6,3 +6,4 @@ data/*.db-journal
 *.log
 .openclaw/
 __pycache__/
+app/data/wa-auth/

@@ -193,6 +193,57 @@ Do this only after the 5 jobs pass on the laptop:
 4. WhatsApp comes **second, on a spare number only** (Baileys ban risk on a
    primary number). Do not link your main WhatsApp.
 
+## Phases B–E — computer use, phone control, offline queue, routines (built 14 Nov 2026)
+
+The app in `app/` now includes screen vision, desktop control, phone
+control, browser use, the offline queue, sync, and routines — all $0, all
+deny-first. The code is built and tested on the VM; the LIVE paths need
+this laptop and your keys. Nothing here is a stub, but nothing here is
+proven live until you run it below.
+
+### B — Desktop control (Windows laptop)
+1. In the app folder, `npm install` (pulls Express + Playwright), then
+   `npx playwright install chromium` (browser use — one download, free).
+2. Put your Gemini key in `app/.env.local` (`GEMINI_API_KEY=...`) — screen
+   vision uses the same key. Groq/OpenAI/Anthropic keys are optional.
+3. Start the app: `npm start` (http://127.0.0.1:3100).
+4. In a SECOND PowerShell window, start the desktop agent:
+   `node desktop-agent.js` (listens on 127.0.0.1:3101, same token).
+   It shows an on-screen indicator while controlling the desktop, with a
+   Freeze button. It refuses credential/OTP/admin prompts by rule.
+5. Test: open the web UI → the screen loop runs via
+   `POST /api/screen/loop {"task":"..."}`. Destructive acts need an
+   approved approval id — create one in the UI first.
+6. Prove it: run `bash tests/run-tests.sh` — the browser test needs no
+   proxy on the laptop; external `goto` works there (it cannot on the VM).
+
+### C — Phone control (Android)
+1. Install Android platform-tools, enable USB debugging on the phone,
+   connect it, authorise the laptop.
+2. In the web UI or API: `POST /api/phone/enable` (30-min session) — the
+   phone is only touched while a session is active, and freeze stops it.
+3. iOS: no screen control exists (Apple restriction) — messaging only.
+4. Telegram (phone-as-remote): put `TELEGRAM_BOT_TOKEN` in `.env.local`
+   and restart the server — the bot polls automatically. Set
+   `TELEGRAM_CHAT_ID` after the first message so only your chat is
+   answered. WhatsApp: spare number ONLY, `WHATSAPP_ENABLED=yes` +
+   `WHATSAPP_SPARE_NUMBER_CONFIRMED=yes` + `npm install
+   @whiskeysockets/baileys` on the laptop, then scan the QR yourself.
+
+### D — Offline queue + cloud sync
+- The outbox is automatic: jobs that need the network queue in SQLite and
+  drain when the connection returns. Watch it in the web UI (Queue panel).
+- Cloud node: Oracle Always Free, same app, behind Tailscale. On the
+  laptop set `SYNC_PEER_URL` + `SYNC_TOKEN` (the cloud node's ANKU_TOKEN)
+  in `.env.local`. Sync is last-write-wins; conflicts surface in
+  `GET /api/sync/conflicts`, never silently overwritten.
+
+### E — Routines
+- Create them in the web UI (Routines panel) or `POST /api/routines`:
+  daily `HH:MM` + weekdays, or an interval in minutes (≥5). Dry-run first
+  (`POST /api/routines/:id/run {"dry_run":true}`). A routine can never
+  send, post, spend or delete — those become pending approvals.
+
 ## Phase 5–6 — cloud (only after Phase 4 passes)
 
 - Cloud = Oracle Cloud Always Free (2 AMD VMs) or a free-tier VPS. Only after

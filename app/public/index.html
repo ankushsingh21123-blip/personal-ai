@@ -11,6 +11,7 @@
   <h1>Ankush's Personal AI</h1>
   <p>Full working, $0 — frontend + backend + database + server, wired up. Brain: Gemini free → Groq free → Ollama local.</p>
   <div id="status">Loading status…</div>
+  <p><button id="freeze-btn">Freeze agent</button> <span id="freeze-state"></span></p>
 </header>
 <main>
   <section id="chat-box">
@@ -35,6 +36,22 @@
       <button type="submit">Create draft approval</button>
     </form>
     <ul id="approvals"></ul>
+  </section>
+  <section>
+    <h2>Offline queue (outbox — work that waits for the network)</h2>
+    <button id="refresh-queue">Refresh queue</button>
+    <button id="drain-queue">Drain now</button>
+    <ul id="queue"></ul>
+  </section>
+  <section>
+    <h2>Routines — scheduled jobs (draft-first, never send/post/spend/delete)</h2>
+    <form id="routine-form">
+      <input id="routine-name" placeholder="Name, e.g. Morning internship check" maxlength="200">
+      <input id="routine-task" placeholder="Task, e.g. check Internshala for new matching roles and draft applications" maxlength="4000">
+      <input id="routine-time" placeholder="Daily time HH:MM, e.g. 09:00" maxlength="5">
+      <button type="submit">Create daily routine</button>
+    </form>
+    <ul id="routines"></ul>
   </section>
   <section>
     <h2>Notes / memory</h2>

@@ -1,6 +1,15 @@
 # TEST-REPORT — Ankush's Personal AI app (full stack, wired up)
 
-## Latest run — 14 Nov 2026, ~00:30 IST (this VM)
+## Latest run — 14 Nov 2026, ~16:30 IST (this VM)
+- Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js tests/providers.test.js tests/phases.test.js`, stops it)
+- Node: v24.22.1, Express 5.3.0, Playwright 1.65.1 + Chromium headless shell 159.0.8154.6, Ollama 0.40.16 (qwen3:0.6b)
+- **Result: 71 passed, 0 failed, 0 skipped, exit 0, 27.0 s** (22 live-server Phase A tests + 12 mocked provider unit tests + 37 new Phases B–E tests)
+
+New in this run: Phases B–E built from `research/computer-use-phone-cloud-spec-2026-11-14.md` — screen vision (`vision.js`, Gemini/OpenAI/Anthropic image input + grounded-action parsing), screen capture (`screen.js`), desktop control (`desktop.js` + laptop-only `desktop-agent.js`, PowerShell/.NET, loopback + token), phone control (`phone.js`, ADB allowlist + per-session enable + iOS honestly labelled), Telegram bot (`telegram.js`, polling, chat-locked), WhatsApp scaffolding (`whatsapp.js`, guards only — spare-number confirmation mandatory), browser use (`browser.js`, Playwright, no submit action), offline queue (`queue.js`, SQLite outbox, backoff 1m/5m/15m/1h/6h, stale-claim sweep), sync (`sync.js`, last-write-wins, conflicts surfaced), routines (`routines.js`, daily/interval schedules, run lock, missed policy), freeze (`freeze.js`, persisted instant-stop), and the server wiring + frontend panels (freeze button, queue, routines). New tests #35–71 (`tests/phases.test.js`): 28 unit tests (mocked fetch / injected drivers) + 9 live API tests. **Live-proven on this VM:** browser launch + render + read + screenshot (real Chromium, local page, 1.9 s); queue persistence across a new DB connection (restart survival); routine tick + lock + dry run; sync push/pull round-trip; freeze persistence. **UNPROVEN live (no key / desktop / phone / second node here):** vision round-trips (mocked fetch only), desktop-agent execution (Windows-only, refuses to start on Linux), ADB control (no device), Telegram/WhatsApp live runs (no token/number), two-node sync (merge logic unit-tested, endpoints live-tested single-node), external browser `goto` (VM egress proxy rejects Chromium CONNECT tunnels — launch + local render proven; `goto` works on the laptop, no proxy there). Failures found and fixed in this loop: (1) `queue.enqueue` with `maxAttempts: 0` silently defaulted to 5 — now validated; (2) `routines.runRoutine` double-parsed an already-parsed schedule (`"[object Object]" is not valid JSON`) — schedule normalised once; (3) a vision test read the wrong mocked-fetch call array. Security checks re-run same session: **ALL PASS** (21 checks + npm audit skipped — endpoint unreachable from this VM, as before; checks extended to the new modules: desktop-agent loopback, WhatsApp guards, sensitive-action refusal, freeze checks, wa-auth git-ignore).
+
+Measured latencies this run (VM numbers, not laptop numbers — the thinking step is model-bound, per spec §2.1): Ollama qwen3:0.6b turn 10.2 s; Gemini chat turn (helper) 11.8 s; browser launch + render + read + screenshot 1.9 s; screenLoop step latencies are recorded per step (capture/ground/act ms) in the loop result. No "faster than all models" claim is made anywhere — the speed design (small local model for routine steps, frontier only for plan/recover/judge) is in the spec, and the loop measures rather than promises.
+
+## Earlier run — 14 Nov 2026, ~00:30 IST (this VM)
 - Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js tests/providers.test.js`, stops it)
 - Node: v24.22.1, Express 5.3.0, Ollama 0.40.16 (binary reinstalled to `~/ollama` this session — the VM replacement had wiped it; the qwen3:0.6b model blobs survived in `~/.ollama`)
 - **Result: 34 passed, 0 failed, 0 skipped, exit 0, 22.9 s** (22 live-server tests + 12 mocked provider unit tests)
@@ -76,4 +85,10 @@ New in this run vs the 17-test run: audit Medium fixes — Gemini key now sent v
 ## What is NOT yet proven
 - Native function calling live end-to-end (needs GEMINI_API_KEY on the laptop — direct REST path; parser + declarations are unit-tested and the fallback is proven live, but no live functionCall round-trip has run yet).
 - OpenAI / Anthropic live round-trips (unit-tested with mocked fetch only; need a key on the laptop).
-- Groq fallback (no key), Telegram/WhatsApp phone loop (needs Ankush's bot token / spare number), Oracle cloud 7-day uptime (Phase 6, after Phase 5), OpenClaw agent turn with Gemini brain (needs his key on the laptop), OpenCode/goose coding job with qwen3:8b/Gemini (needs the laptop model).
+- Vision round-trips (Gemini/OpenAI/Anthropic image input — mocked fetch only; need a key + a screen on the laptop).
+- Desktop-agent execution (Windows-only; refuses to start on this VM; needs the laptop + `node desktop-agent.js`).
+- ADB phone control (no device on this VM; needs his Android phone + authorised debugging).
+- Telegram/WhatsApp live runs (need his bot token / spare number; guards + command handling unit-tested).
+- Two-node sync (merge logic unit-tested, push/pull endpoints live-tested single-node; needs the Oracle cloud node).
+- External browser `goto` on this VM (egress proxy rejects Chromium CONNECT tunnels; launch + local render + read + screenshot proven live; `goto` needs the laptop).
+- Groq fallback (no key), Oracle cloud 7-day uptime (Phase 6, after Phase 5), OpenClaw agent turn with Gemini brain (needs his key on the laptop), OpenCode/goose coding job with qwen3:8b/Gemini (needs the laptop model).

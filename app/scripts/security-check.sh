@@ -10,6 +10,7 @@ check() { if [ "$1" = "0" ]; then echo "PASS: $2"; else echo "FAIL: $2"; FAIL=1;
 grep -q '^\.env\.local$' .gitignore; check $? ".env.local is in .gitignore"
 grep -q 'data/\*\.db' .gitignore; check $? "SQLite DB is in .gitignore"
 grep -q '^node_modules/$' .gitignore; check $? "node_modules is in .gitignore"
+grep -q 'data/wa-auth/' .gitignore; check $? "WhatsApp auth state dir is in .gitignore"
 # 2. No real key committed in TRACKED files (values are never printed).
 #    .env.local / data / node_modules / logs are excluded — they are git-ignored
 #    by design and hold the local token / DB, never a committed secret.
@@ -21,10 +22,17 @@ else echo "PASS: no secret pattern in tracked files (excluding git-ignored .env.
 # 3. Server binds loopback only (code, not comments)
 grep -q "HOST = '127.0.0.1'" server.js; check $? "server binds 127.0.0.1 only"
 grep -q "listen(PORT, '0.0.0.0'\|listen(PORT, \"0.0.0.0\"" server.js; [ "$?" = "1" ]; check $? "no 0.0.0.0 listen call in server.js"
-# 4. No CORS, no eval, no shell exec() — execFile only
+grep -q "HOST = '127.0.0.1'" desktop-agent.js; check $? "desktop agent binds 127.0.0.1 only"
+grep -q "listen(PORT, HOST" desktop-agent.js; check $? "desktop agent listens on HOST (loopback)"
+# 4. No CORS, no eval, no shell exec() — execFile only (all backend files;
+#    db.js excluded — SQLite db.exec is not a shell call)
 grep -q "cors(" server.js; [ "$?" = "1" ]; check $? "no CORS enabled"
-grep -qE '\beval\s*\(' server.js brain.js tools.js db.js; [ "$?" = "1" ]; check $? "no eval() in backend"
-grep -v '^\s*//' server.js tools.js brain.js | grep -qE '\bexec\s*\('; [ "$?" = "1" ]; check $? "no child_process.exec (shell) in code — execFile only (comments/SQLite db.exec excluded)"
+grep -qE '\beval\s*\(' server.js brain.js tools.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js; [ "$?" = "1" ]; check $? "no eval() in backend (page.evaluate is a Playwright API, not eval)"
+grep -v '^\s*//' server.js tools.js brain.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js | grep -qE '\bexec\s*\('; [ "$?" = "1" ]; check $? "no child_process.exec (shell) in code — execFile/spawn only (comments/SQLite db.exec excluded)"
+# 4b. Phase B–E gates present in code
+grep -q "WHATSAPP_SPARE_NUMBER_CONFIRMED" whatsapp.js; check $? "whatsapp spare-number confirmation guard present"
+grep -q "sensitive" desktop.js phone.js browser.js; check $? "sensitive-action refusal present in desktop/phone/browser"
+grep -q "assertNotFrozen\|isFrozen" desktop.js phone.js browser.js queue.js routines.js; check $? "freeze checks present in agent loops"
 # 5. Auth + rate limit present
 grep -q "X-Anku-Token" server.js; check $? "token auth present"
 grep -q "rateLimit" server.js; check $? "rate limit present"
