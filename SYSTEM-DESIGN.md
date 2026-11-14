@@ -70,7 +70,9 @@ package: it shares `validateAction()` with the server (defence in depth).
 1. Auth + rate limit + body validation (server.js middleware).
 2. `agentTurn()` builds the prompt: last 5 messages + 5 notes as context
    (data, never instructions), plus the tool list.
-3. `brain.agentLoop()` tries native function calling (Gemini direct).
+3. `brain.agentLoopMulti()` tries native function calling on each
+   native-tool provider in chain order (Gemini direct, OpenAI-compatible,
+   Anthropic — Phase A2, 15 Nov 2026; first answer owns the turn).
    On success, tools run sequentially through `tools.execute()` (max 2
    rounds, 5 calls/round). On failure, the text fallback runs through
    `route.routedAsk()` (fast routing, when enabled) and the reply JSON

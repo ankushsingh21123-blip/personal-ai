@@ -42,13 +42,18 @@ const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 2048);
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const GEMINI_HELPER = path.join(os.homedir(), 'workspace/custom-connectors/custom.gemini/bin/gemini.py');
 
-// Native function calling (Gemini direct only, 13 Nov 2026).
-// The VM helper, Groq, OpenAI, Anthropic and Ollama paths return text only —
-// the server's JSON fallback handles those. These declarations mirror
-// tools.js exactly:
+// Native function calling (Phase A2, 15 Nov 2026): Gemini direct, OpenAI /
+// OpenAI-compatible, and Anthropic all call tools natively. The VM helper,
+// Groq, and Ollama paths return text only — the server's JSON fallback
+// handles those. The declarations below are the single source of truth:
 // every declared function must be an allowlisted tool, and no
-// send/post/spend/delete tool is ever declared. All deny-first checks stay
-// in tools.execute — this list only tells the model what it may ask for.
+// send/post/spend/delete tool is ever declared. The OpenAI and Anthropic
+// tool schemas are DERIVED from these declarations (toJsonSchema), never
+// written twice, so the three providers can never drift apart. All
+// deny-first checks stay in tools.execute — these lists only tell the
+// model what it may ask for. HONEST STATUS: the OpenAI/Anthropic native
+// paths are unit-tested-only (mocked fetch) — no live round-trip is
+// proven, no key on this VM.
 const TOOL_DECLARATIONS = [
   { name: 'list_files', description: 'List files and directories inside the workspace.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING', description: 'Directory path relative to the workspace, default "."' } } } },
   { name: 'read_file', description: 'Read a text file inside the workspace (max 20000 chars). Secret and database paths are denied.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING', description: 'File path relative to the workspace' } }, required: ['path'] } },
@@ -93,6 +98,89 @@ function parseGeminiResponse(data) {
     functionCalls.push({ name: fc.name, args });
   }
   return { text, functionCalls };
+}
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// Convert a Gemini-style declaration schema (UPPERCASE types) to a plain
+// JSON Schema (lowercase types) for the OpenAI/Anthropic tool definitions.
+// Recurses into properties and items; preserves description, required, and
+// enum. Non-object input yields an empty object schema — never throws.
+function toJsonSchema(params) {
+  if (!isPlainObject(params)) return { type: 'object', properties: {} };
+  const out = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (k === 'type' && typeof v === 'string') out.type = v.toLowerCase();
+    else if (k === 'properties' && isPlainObject(v)) {
+      out.properties = {};
+      for (const [pk, pv] of Object.entries(v)) out.properties[pk] = toJsonSchema(pv);
+    } else if (k === 'items') out.items = toJsonSchema(v);
+    else out[k] = v;
+  }
+  return out;
+}
+
+// OpenAI Chat Completions `tools` — derived from TOOL_DECLARATIONS.
+function openaiTools() {
+  return TOOL_DECLARATIONS.map(d => ({
+    type: 'function',
+    function: { name: d.name, description: d.description, parameters: toJsonSchema(d.parameters) },
+  }));
+}
+
+// Anthropic Messages API `tools` — derived from TOOL_DECLARATIONS.
+function anthropicTools() {
+  return TOOL_DECLARATIONS.map(d => ({
+    name: d.name, description: d.description, input_schema: toJsonSchema(d.parameters),
+  }));
+}
+
+// Parse an OpenAI Chat Completions response into { text, toolCalls }.
+// Same deny-first validation as parseGeminiResponse: a tool call needs a
+// string id (required to answer it), a declared name, and arguments that
+// parse to a plain object (empty/missing means {}). Malformed, undeclared,
+// id-less, or non-object calls are dropped, never trusted — and denied
+// again by tools.execute if they ever reached it.
+function parseOpenAIResponse(data) {
+  const msg = data?.choices?.[0]?.message || {};
+  const text = typeof msg.content === 'string' ? msg.content : '';
+  const toolCalls = [];
+  const raw = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+  for (const tc of raw) {
+    const fn = tc?.function;
+    if (!tc || typeof tc.id !== 'string' || !tc.id) continue;
+    if (!fn || typeof fn.name !== 'string' || !TOOL_NAMES.has(fn.name)) continue;
+    let args = fn.arguments;
+    if (args === undefined || args === null || args === '') args = {};
+    else if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { continue; }
+    }
+    if (!isPlainObject(args)) continue;
+    toolCalls.push({ id: tc.id, name: fn.name, args });
+  }
+  return { text, toolCalls };
+}
+
+// Parse an Anthropic Messages response into { text, toolCalls }.
+// Text blocks join into the reply; tool_use blocks need a string id, a
+// declared name, and a plain-object input (missing means {}). Anything
+// else is dropped. Thinking/redacted blocks are ignored, never surfaced.
+function parseAnthropicResponse(data) {
+  const blocks = Array.isArray(data?.content) ? data.content : [];
+  let text = '';
+  const toolCalls = [];
+  for (const b of blocks) {
+    if (b?.type === 'text' && typeof b.text === 'string') text += b.text;
+    if (b?.type !== 'tool_use') continue;
+    if (typeof b.id !== 'string' || !b.id) continue;
+    if (typeof b.name !== 'string' || !TOOL_NAMES.has(b.name)) continue;
+    const input = b.input === undefined ? {} : b.input;
+    if (!isPlainObject(input)) continue;
+    toolCalls.push({ id: b.id, name: b.name, args: input });
+  }
+  return { text, toolCalls };
 }
 
 async function postJson(url, body, headers = {}) {
@@ -179,9 +267,10 @@ async function openaiChat(prompt) {
   // OpenAI API, or ANY OpenAI-compatible endpoint. The user supplies the key
   // (OPENAI_API_KEY) and optionally a base URL (OPENAI_BASE_URL) and model
   // (OPENAI_MODEL). Default model is a cheap small model; override it with
-  // OPENAI_MODEL to whatever the key's account supports. Text-only: the
-  // server's JSON fallback handles tool use on this path. Unit-tested-only
-  // (mocked fetch) — no live round-trip proven, no key on this VM.
+  // OPENAI_MODEL to whatever the key's account supports. Text-only chat;
+  // native tool calling lives in openaiGenerateWithTools + agentLoopMulti.
+  // Unit-tested-only (mocked fetch) — no live round-trip proven, no key on
+  // this VM.
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('no OPENAI_API_KEY');
   const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
@@ -194,11 +283,29 @@ async function openaiChat(prompt) {
   return { text, model, provider: 'openai' };
 }
 
+// One native tool-calling round on an OpenAI-compatible endpoint: the full
+// message history goes in, { text, toolCalls } comes out. Tool schemas are
+// derived from TOOL_DECLARATIONS (openaiTools). Unit-tested-only (mocked
+// fetch) — no live round-trip proven, no key on this VM.
+async function openaiGenerateWithTools(messages) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('no OPENAI_API_KEY');
+  const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const data = await postJson(`${base}/chat/completions`,
+    { model, temperature: 0.2, messages, tools: openaiTools(), tool_choice: 'auto' },
+    { Authorization: `Bearer ${key}` });
+  const { text, toolCalls } = parseOpenAIResponse(data);
+  if (!text && toolCalls.length === 0) throw new Error('empty OpenAI-compatible response');
+  return { text, toolCalls, model, provider: 'openai' };
+}
+
 async function anthropicChat(prompt) {
   // Anthropic Messages API. Key via ANTHROPIC_API_KEY, model via
   // ANTHROPIC_MODEL, output cap via ANTHROPIC_MAX_TOKENS (required by the
-  // API). Text-only: the server's JSON fallback handles tool use on this
-  // path. Unit-tested-only (mocked fetch) — no live round-trip proven.
+  // API). Text-only chat; native tool calling lives in
+  // anthropicGenerateWithTools + agentLoopMulti. Unit-tested-only (mocked
+  // fetch) — no live round-trip proven.
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('no ANTHROPIC_API_KEY');
   const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5';
@@ -211,6 +318,23 @@ async function anthropicChat(prompt) {
     .map(b => b.text).join('');
   if (!text) throw new Error('empty Anthropic response');
   return { text, model, provider: 'anthropic' };
+}
+
+// One native tool-calling round on the Anthropic Messages API: the full
+// message history goes in, { text, toolCalls } comes out. Tool schemas are
+// derived from TOOL_DECLARATIONS (anthropicTools). Unit-tested-only
+// (mocked fetch) — no live round-trip proven, no key on this VM.
+async function anthropicGenerateWithTools(messages) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('no ANTHROPIC_API_KEY');
+  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5';
+  const maxTokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 1024);
+  const data = await postJson('https://api.anthropic.com/v1/messages',
+    { model, max_tokens: maxTokens, messages, tools: anthropicTools() },
+    { 'x-api-key': key, 'anthropic-version': '2023-06-01' });
+  const { text, toolCalls } = parseAnthropicResponse(data);
+  if (!text && toolCalls.length === 0) throw new Error('empty Anthropic response');
+  return { text, toolCalls, model, provider: 'anthropic' };
 }
 
 async function ollama(prompt) {
@@ -325,6 +449,137 @@ async function ask(prompt, only) {
   throw new Error(`all brain providers failed (tried: ${tried.join(', ')})`);
 }
 
+// Shared executor step for every native tool loop: run validated calls
+// sequentially through the deny-first executor (tools.execute) so a later
+// call can depend on an earlier one. Results are capped (2000 chars);
+// failures become error results the model sees, and are recorded in the
+// evidence array in place. The executor is the single gate — this helper
+// never approves, skips, or reorders a check.
+async function executeCalls(calls, executor, evidence) {
+  const results = [];
+  for (const c of calls) {
+    try {
+      const out = await executor(c.name, c.args);
+      const clipped = JSON.stringify(out).slice(0, 2000);
+      evidence.push({ tool: c.name, ok: true, result: clipped });
+      results.push({ call: c, ok: true, output: clipped });
+    } catch (e) {
+      const msg = String(e?.message || e).slice(0, 300);
+      evidence.push({ tool: c.name, ok: false, error: msg });
+      results.push({ call: c, ok: false, error: msg });
+    }
+  }
+  return results;
+}
+
+function synthesizeEvidenceText(evidence) {
+  return `I ran ${evidence.length} tool(s): ` + evidence.map(ev => `${ev.tool} ${ev.ok ? 'ok' : 'failed'}`).join(', ') + '.';
+}
+
+// Gemini native tool loop. Throws ONLY if Gemini never answers (the first
+// generate fails) — callers treat that as "provider unavailable" and move
+// on. A later-round failure returns the partial result: tools already ran,
+// so the evidence must reach the user, never be discarded by switching
+// providers mid-turn.
+async function geminiToolLoop(prompt, executor) {
+  const contents = [{ role: 'user', parts: [{ text: prompt }] }];
+  const evidence = [];
+  let last = null;
+  let answered = false;
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    let r;
+    try {
+      r = await geminiGenerate(contents, true);
+    } catch (e) {
+      if (!answered) throw e;
+      break;
+    }
+    answered = true;
+    last = r;
+    const calls = r.functionCalls.slice(0, MAX_CALLS_PER_ROUND);
+    if (calls.length === 0) break;
+    contents.push({ role: 'model', parts: calls.map(c => ({ functionCall: { name: c.name, args: c.args } })) });
+    const results = await executeCalls(calls, executor, evidence);
+    contents.push({
+      role: 'user',
+      parts: results.map(res => res.ok
+        ? { functionResponse: { name: res.call.name, response: { output: res.output } } }
+        : { functionResponse: { name: res.call.name, response: { error: res.error } } }),
+    });
+  }
+  return { text: last?.text || '', model: last?.model, evidence };
+}
+
+// OpenAI native tool loop. Same contract as geminiToolLoop: throws only if
+// the provider never answers. Only the executed calls are echoed back in
+// the history — calls beyond the per-round cap are dropped outright, so the
+// model never sees an unanswered tool_call id.
+async function openaiToolLoop(prompt, executor) {
+  const messages = [{ role: 'user', content: prompt }];
+  const evidence = [];
+  let last = null;
+  let answered = false;
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    let r;
+    try {
+      r = await openaiGenerateWithTools(messages);
+    } catch (e) {
+      if (!answered) throw e;
+      break;
+    }
+    answered = true;
+    last = r;
+    const calls = r.toolCalls.slice(0, MAX_CALLS_PER_ROUND);
+    if (calls.length === 0) break;
+    messages.push({
+      role: 'assistant',
+      content: r.text || null,
+      tool_calls: calls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } })),
+    });
+    const results = await executeCalls(calls, executor, evidence);
+    for (const res of results) {
+      messages.push({ role: 'tool', tool_call_id: res.call.id, content: res.ok ? res.output : `Error: ${res.error}` });
+    }
+  }
+  return { text: last?.text || '', model: last?.model, evidence };
+}
+
+// Anthropic native tool loop. Same contract as geminiToolLoop. Tool results
+// go back as tool_result blocks in a user message, with is_error set on
+// failures; only executed calls are echoed, so every tool_use in the
+// history has exactly one matching tool_result.
+async function anthropicToolLoop(prompt, executor) {
+  const messages = [{ role: 'user', content: prompt }];
+  const evidence = [];
+  let last = null;
+  let answered = false;
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    let r;
+    try {
+      r = await anthropicGenerateWithTools(messages);
+    } catch (e) {
+      if (!answered) throw e;
+      break;
+    }
+    answered = true;
+    last = r;
+    const calls = r.toolCalls.slice(0, MAX_CALLS_PER_ROUND);
+    if (calls.length === 0) break;
+    const assistantBlocks = [];
+    if (r.text) assistantBlocks.push({ type: 'text', text: r.text });
+    for (const c of calls) assistantBlocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args });
+    messages.push({ role: 'assistant', content: assistantBlocks });
+    const results = await executeCalls(calls, executor, evidence);
+    messages.push({
+      role: 'user',
+      content: results.map(res => res.ok
+        ? { type: 'tool_result', tool_use_id: res.call.id, content: res.output }
+        : { type: 'tool_result', tool_use_id: res.call.id, content: res.error, is_error: true }),
+    });
+  }
+  return { text: last?.text || '', model: last?.model, evidence };
+}
+
 // Native function-calling loop (Gemini direct only).
 // executor(tool, args) is tools.execute — every deny-first check lives there,
 // never here. toolsPrompt is written for a model with tools; textPrompt is
@@ -332,51 +587,58 @@ async function ask(prompt, only) {
 // Returns { text, model, provider, tried, usedTools, evidence }.
 // If Gemini direct never answers, falls back to ask(textPrompt) and returns
 // usedTools:false so the caller can use its JSON-parsing fallback on the
-// text. Tool results are capped (2000 chars) and executed sequentially so a
-// later call can depend on an earlier one. At most MAX_TOOL_ROUNDS rounds.
+// text. Kept for backward compatibility; new code should use
+// agentLoopMulti, which tries every native-tool provider in chain order.
 async function agentLoop(toolsPrompt, textPrompt, executor, opts = {}) {
-  const contents = [{ role: 'user', parts: [{ text: toolsPrompt }] }];
-  const evidence = [];
-  let last = null;
+  let r;
   try {
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      last = await geminiGenerate(contents, true);
-      const calls = last.functionCalls.slice(0, MAX_CALLS_PER_ROUND);
-      if (calls.length === 0) break;
-      contents.push({ role: 'model', parts: calls.map(c => ({ functionCall: { name: c.name, args: c.args } })) });
-      const responses = [];
-      for (const c of calls) {
-        try {
-          const out = await executor(c.name, c.args);
-          const clipped = JSON.stringify(out).slice(0, 2000);
-          evidence.push({ tool: c.name, ok: true, result: clipped });
-          responses.push({ functionResponse: { name: c.name, response: { output: clipped } } });
-        } catch (e) {
-          const msg = String(e?.message || e).slice(0, 300);
-          evidence.push({ tool: c.name, ok: false, error: msg });
-          responses.push({ functionResponse: { name: c.name, response: { error: msg } } });
-        }
-      }
-      contents.push({ role: 'user', parts: responses });
-    }
+    r = await geminiToolLoop(toolsPrompt, executor);
   } catch (e) {
-    if (!last && evidence.length === 0) {
-      // Gemini direct never answered — full text fallback, same chain as ask().
-      // opts.askFn lets the caller route the fallback (fast routing); the
-      // default is ask() itself. ask() records gemini-direct in its own
-      // tried list, so keep it as-is.
-      const fallbackAsk = opts.askFn || ask;
-      const r = await fallbackAsk(textPrompt);
-      return { ...r, tried: r.tried, usedTools: false, evidence: [] };
+    // Gemini direct never answered — full text fallback, same chain as ask().
+    // opts.askFn lets the caller route the fallback (fast routing); the
+    // default is ask() itself.
+    const fallbackAsk = opts.askFn || ask;
+    const fb = await fallbackAsk(textPrompt);
+    return { ...fb, tried: fb.tried, usedTools: false, evidence: [] };
+  }
+  let text = r.text;
+  if (!text && r.evidence.length > 0) text = synthesizeEvidenceText(r.evidence);
+  return { text, model: r.model, provider: 'gemini-direct', tried: ['gemini-direct'], usedTools: true, evidence: r.evidence };
+}
+
+// Providers with a native tool loop, keyed by registry name.
+const NATIVE_LOOPS = {
+  'gemini-direct': geminiToolLoop,
+  openai: openaiToolLoop,
+  anthropic: anthropicToolLoop,
+};
+
+// Multi-provider native function-calling loop (Phase A2, 15 Nov 2026).
+// Tries each native-tool provider in the resolved chain order (resolveOrder
+// already skips providers with no key) — the first provider that answers
+// owns the turn, so a turn never mixes providers mid-loop. If no native
+// provider answers, falls back to the text chain exactly like agentLoop,
+// returning usedTools:false so the caller can use its JSON-parsing fallback.
+// Same return shape as agentLoop. Unit-tested-only (mocked fetch) for the
+// OpenAI/Anthropic paths — no live round-trip proven, no key on this VM.
+async function agentLoopMulti(toolsPrompt, textPrompt, executor, opts = {}) {
+  const tried = [];
+  for (const name of resolveOrder()) {
+    const loop = NATIVE_LOOPS[name];
+    if (!loop) continue;
+    tried.push(name);
+    try {
+      const r = await loop(toolsPrompt, executor);
+      let text = r.text;
+      if (!text && r.evidence.length > 0) text = synthesizeEvidenceText(r.evidence);
+      return { text, model: r.model, provider: name, tried, usedTools: true, evidence: r.evidence };
+    } catch (e) {
+      // Provider never answered — try the next native provider.
     }
-    // A later round failed after tools already ran — keep the evidence and
-    // reply from whatever text the last good round produced.
   }
-  let text = last?.text || '';
-  if (!text && evidence.length > 0) {
-    text = `I ran ${evidence.length} tool(s): ` + evidence.map(ev => `${ev.tool} ${ev.ok ? 'ok' : 'failed'}`).join(', ') + '.';
-  }
-  return { text, model: last?.model, provider: 'gemini-direct', tried: ['gemini-direct'], usedTools: true, evidence };
+  const fallbackAsk = opts.askFn || ask;
+  const fb = await fallbackAsk(textPrompt);
+  return { ...fb, tried: fb.tried, usedTools: false, evidence: [] };
 }
 
 async function ollamaReachable() {
@@ -388,4 +650,4 @@ async function ollamaReachable() {
   } catch { return false; }
 }
 
-module.exports = { ask, askWith, agentLoop, parseGeminiResponse, TOOL_DECLARATIONS, ollamaReachable, GEMINI_MODELS, GROQ_MODEL, OLLAMA_MODEL, resolveOrder };
+module.exports = { ask, askWith, agentLoop, agentLoopMulti, parseGeminiResponse, parseOpenAIResponse, parseAnthropicResponse, toJsonSchema, openaiTools, anthropicTools, TOOL_DECLARATIONS, ollamaReachable, GEMINI_MODELS, GROQ_MODEL, OLLAMA_MODEL, resolveOrder };

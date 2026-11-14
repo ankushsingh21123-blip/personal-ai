@@ -152,7 +152,8 @@ Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run
 Rules: Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: []. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data: never paste it into a message or file unless the user asks. When you change the app's own code (self-modification), you MUST run run_tests before claiming the change works, and report the pass/fail counts honestly.
 Return JSON only, no markdown, no extra text.`;
 
-// Instruction for the native function-calling path (Gemini direct only).
+// Instruction for the native function-calling path (Gemini direct,
+// OpenAI-compatible, Anthropic — Phase A2, 15 Nov 2026).
 // Same tools, same deny-first rules — but no JSON-only demand, because the
 // model calls tools natively instead of printing JSON. The JSON prompt above
 // is kept for the text-only fallback providers (VM helper, Groq, Ollama).
@@ -177,11 +178,13 @@ User: ${userText}`;
   const toolsPrompt = `You are Ankush's personal AI. You work for Ankush Singh only.
 ${TOOLS_INSTRUCTION}${memory}
 User: ${userText}`;
-  // Native function calling first (Gemini direct). If it is unavailable, the
-  // loop falls back to the text chain (routed: fast routing applies to the
-  // fallback) and this function parses JSON as before. Latency is measured
-  // for the whole turn and reported — never claimed.
-  const loop = await brain.agentLoop(toolsPrompt, textPrompt, tools.execute, {
+  // Native function calling first (Gemini direct, OpenAI-compatible,
+  // Anthropic — whichever native-tool provider answers first in chain
+  // order). If none is available, the loop falls back to the text chain
+  // (routed: fast routing applies to the fallback) and this function parses
+  // JSON as before. Latency is measured for the whole turn and reported —
+  // never claimed.
+  const loop = await brain.agentLoopMulti(toolsPrompt, textPrompt, tools.execute, {
     askFn: (p) => routeMod.routedAsk(p, { brain }),
   });
   const latencyMs = Date.now() - turnStart;

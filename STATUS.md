@@ -8,10 +8,10 @@ Product expansion built 14 Nov (same day): Settings/API keys end to end, 20 tool
 ## What works on this VM (tested for real — see app/tests/TEST-REPORT.md)
 | Piece | Version / model | Status |
 |---|---|---|
-| App (frontend+backend+DB+server) | Node 24.22.1, Express 5.3.0, node:sqlite | ✅ 113/113 tests pass, 31.1 s (22 live Phase A + 12 provider unit + 37 Phases B–E + 42 product-expansion) |
+| App (frontend+backend+DB+server) | Node 24.22.1, Express 5.3.0, node:sqlite | ✅ 131/131 tests pass, 35.3 s (22 live Phase A + 30 provider unit + 37 Phases B–E + 42 product-expansion) |
 | Multi-provider brain (Phase A) | Gemini, Groq, OpenAI/OpenAI-compatible, Anthropic, Ollama | ✅ Chain + fallback proven; OpenAI/Anthropic unit-tested-only (no live key on VM) |
 | Settings / API keys | `settings.js` + `/api/settings/*` + Settings UI | ✅ Write/remove/order/test round-trips proven live; masked previews only; keys in `.env.local` (600), never synced/logged; cloud-provider test calls unproven (no keys) |
-| Native function calling | Gemini `functionDeclarations` → deny-first tools, 2 rounds max, 5 calls/round | ✅ Wired: declarations mirror tools.js exactly (20 tools), malformed/undeclared calls dropped; live end-to-end needs his Gemini key on the laptop |
+| Native function calling | Gemini `functionDeclarations` + OpenAI `tools` + Anthropic `tools` → deny-first tools, 2 rounds max, 5 calls/round | ✅ Wired: schemas derived from one declaration source (20 tools), malformed/undeclared calls dropped; `agentLoopMulti` tries native providers in chain order; live end-to-end needs his keys on the laptop (Phase A2, unit-tested-only) |
 | Fast routing | Deterministic classifier, local-first for routine text only | ✅ Unit-tested + fallback proven; OFF by default; routing decision + latency recorded per turn |
 | Replay log | Sessions + PNG shots + verified replay | ✅ Record/retrieve/purge + verified-replay semantics proven (mocked + live HTTP); live screen replay needs the laptop |
 | Notifications | Local inbox, UI + API | ✅ Proven live (create/read/unread) |
@@ -44,17 +44,17 @@ Product expansion built 14 Nov (same day): Settings/API keys end to end, 20 tool
 
 ## Still needs Ankush
 - His Windows laptop install (Node 24.22.1, WSL2, Ollama qwen3:8b) + `npx playwright install chromium` — see SETUP.md (Phases B–E section)
-- His Gemini key in .env.local (secure form only) + Groq key later — unlocks live native function calling AND live screen vision
+- His Gemini key in .env.local (secure form only) + Groq key later — unlocks live native function calling AND live screen vision; OpenAI/Anthropic keys unlock their native tool loops too (Phase A2)
 - Desktop agent run on the laptop: `node desktop-agent.js` (second PowerShell window)
 - Telegram bot token via @BotFather; spare number for WhatsApp (never primary)
 - Oracle Cloud account (cloud node behind Tailscale) + `SYNC_PEER_URL`/`SYNC_TOKEN` for sync
 - Android phone + authorised USB/wireless debugging, for live phone control
 
 ## Files
-- `app/` — the working system: README, SECURITY, server/brain/tools/db, vision/screen/desktop/phone/telegram/whatsapp/browser/queue/sync/routines/freeze, settings/secrets/notify/replay/route/clipboard/windows/doctor, desktop-agent.js, public frontend, tests (113/113), TEST-REPORT, security-check
+- `app/` — the working system: README, SECURITY, server/brain/tools/db, vision/screen/desktop/phone/telegram/whatsapp/browser/queue/sync/routines/freeze, settings/secrets/notify/replay/route/clipboard/windows/doctor, desktop-agent.js, public frontend, tests (131/131), TEST-REPORT, security-check
 - `SYSTEM-DESIGN.md` — architecture, data flow, trust boundaries, failure modes; `PRIVACY.md` — plain-English privacy; `docs/` — API-KEYS, TOOLS, CUSTOMIZE
 - `setup-app.sh` / `setup-app.ps1` — one-command laptop setup (+ dry-run); `.githooks/pre-push` — secret scan before every push
-- `research/` — personal-ai-laptop-phone-cloud-2026-11-11.md, efficiency-2026-11-12.md, alternatives-2026-11-12.md, competitive-chatgpt-muse-2026-11-12.md, computer-use-phone-cloud-spec-2026-11-14.md (Phases B–E spec — BUILT 14 Nov, live paths marked)
+- `research/` — personal-ai-laptop-phone-cloud-2026-11-11.md, efficiency-2026-11-12.md, alternatives-2026-11-12.md, competitive-chatgpt-muse-2026-11-12.md, computer-use-phone-cloud-spec-2026-11-14.md (Phases B–E spec — BUILT 14 Nov, live paths marked; Phase A2 built 15 Nov), roadmap-responsible-autonomy-messaging-2026-11-15.md (design note: decision policies + audit + escalation, WhatsApp phased plan — NOT built/enabled)
 - `projects/proof-internship-tracker/` — 9/9 tests, real full-stack proof project
 - `skills/coding-agent.md` — OpenCode primary, goose fallback
 - `GITHUB.md` — repo prep; repo is PUBLIC at https://github.com/ankushsingh21123-blip/personal-ai
