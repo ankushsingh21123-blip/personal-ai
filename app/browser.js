@@ -35,7 +35,7 @@ function validateSelector(selector) {
   return selector;
 }
 
-const BROWSER_ACTIONS = new Set(['goto', 'click', 'type', 'screenshot', 'text', 'wait', 'title']);
+const BROWSER_ACTIONS = new Set(['goto', 'click', 'type', 'screenshot', 'text', 'wait', 'title', 'back', 'forward', 'snapshot', 'click_ref', 'type_ref', 'find_text', 'click_text']);
 
 function validateAction(action) {
   if (!action || typeof action !== 'object' || Array.isArray(action)) throw new Error('browser action must be an object');
@@ -53,6 +53,24 @@ function validateAction(action) {
     if (!Number.isInteger(ms) || ms < 0 || ms > 30000) throw new Error('wait ms must be an integer 0..30000');
     out.ms = ms;
   }
+  // Element-first actions (deterministic layer): snapshot the page into
+  // numbered entries with stable selectors, then act by reference. A stale
+  // reference (page changed, element gone) fails instead of acting on the
+  // wrong element. This is the primary browser path; screenshots + vision
+  // are the fallback for canvas/custom widgets.
+  if (action.action === 'click_ref' || action.action === 'type_ref') {
+    if (!Number.isInteger(action.index) || action.index < 0 || action.index > 10000) throw new Error(`${action.action} needs an integer index >= 0 from a snapshot`);
+    out.index = action.index;
+  }
+  if (action.action === 'type_ref') {
+    if (typeof action.text !== 'string' || action.text.length === 0 || action.text.length > 4000) throw new Error('type_ref needs text, 1..4000 chars');
+    if (action.sensitive) throw new Error('denied: sensitive text (credentials, OTPs) is never typed in the browser');
+    out.text = action.text;
+  }
+  if (action.action === 'find_text' || action.action === 'click_text') {
+    if (typeof action.text !== 'string' || action.text.length === 0 || action.text.length > 500) throw new Error(`${action.action} needs text, 1..500 chars`);
+    out.text = action.text;
+  }
   return out;
 }
 
@@ -61,6 +79,18 @@ function validateAction(action) {
 // API response, or the audit table.
 function sanitizeErrorText(s) {
   return String(s || '').replace(/(https?:\/\/)[^@\s/]+@/g, '$1***@');
+}
+
+// Best-effort current URL: the live page's url() when available, else the
+// last URL the agent navigated to. Never throws.
+function pageUrl(page, agent) {
+  try {
+    if (page && typeof page.url === 'function') {
+      const u = page.url();
+      if (u) return u;
+    }
+  } catch {}
+  return agent ? agent.currentUrl : null;
 }
 
 function launchOptions() {
@@ -86,6 +116,48 @@ function capability() {
   return { available: true, package: true, executable: true, executablePath: exe, reason: null };
 }
 
+// Runs INSIDE the page (passed to page.evaluate). Builds a numbered
+// outline of interactive elements with a stable CSS selector each, so the
+// agent can act by reference instead of guessing coordinates. Invisible
+// and duplicate elements are skipped; capped at 200 entries.
+function snapshotDom() {
+  const out = [];
+  const seen = new Set();
+  function selectorFor(el) {
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && parts.length < 6) {
+      if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
+      let seg = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter(c => c.tagName === node.tagName);
+        if (siblings.length > 1) seg += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+      }
+      parts.unshift(seg);
+      node = parent;
+    }
+    return parts.join(' > ');
+  }
+  function nameOf(el) {
+    return (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('placeholder') || el.tagName || '')
+      .trim().replace(/\s+/g, ' ').slice(0, 80);
+  }
+  const els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], h1, h2, h3');
+  for (const el of els) {
+    if (out.length >= 200) break;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') continue;
+    const sel = selectorFor(el);
+    if (seen.has(sel)) continue;
+    seen.add(sel);
+    out.push({ role: el.getAttribute('role') || el.tagName.toLowerCase(), name: nameOf(el), selector: sel });
+  }
+  return out;
+}
+
 // BrowserAgent — driver injectable for tests (a fake page object with the
 // same methods). The real driver is a Playwright page.
 class BrowserAgent {
@@ -95,6 +167,7 @@ class BrowserAgent {
     this.browser = null;
     this.page = null;
     this.currentUrl = null;
+    this.lastSnapshot = null; // { url, entries, at } — element refs live here
   }
 
   async ensurePage() {
@@ -145,9 +218,66 @@ class BrowserAgent {
       result = { ok: true, ms: a.ms };
     } else if (a.action === 'title') {
       result = { ok: true, title: await page.title() };
+    } else if (a.action === 'back') {
+      await page.goBack({ timeout: 15000 }).catch(() => {});
+      result = { ok: true, url: pageUrl(page, this) };
+    } else if (a.action === 'forward') {
+      await page.goForward({ timeout: 15000 }).catch(() => {});
+      result = { ok: true, url: pageUrl(page, this) };
+    } else if (a.action === 'snapshot') {
+      const entries = await page.evaluate(snapshotDom);
+      const list = (Array.isArray(entries) ? entries : []).slice(0, 200).map((e, i) => ({
+        index: i, role: String(e?.role || ''), name: String(e?.name || '').slice(0, 80), selector: String(e?.selector || '').slice(0, 500),
+      }));
+      this.lastSnapshot = { url: pageUrl(page, this), entries: list, at: Date.now() };
+      result = { ok: true, url: this.lastSnapshot.url, entries: list };
+    } else if (a.action === 'click_ref' || a.action === 'type_ref') {
+      const entry = this.resolveRef(a.index, page);
+      // Re-verify the element still exists and is visible before acting —
+      // a stale ref fails instead of clicking the wrong thing.
+      const state = await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return 'missing';
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        if ((r.width === 0 && r.height === 0) || s.visibility === 'hidden' || s.display === 'none') return 'hidden';
+        return String(el.getAttribute('type') || el.tagName).toLowerCase();
+      }, entry.selector).catch(() => 'missing');
+      if (state === 'missing' || state === 'hidden') throw new Error(`stale snapshot reference #${a.index} (${state}) — take a fresh snapshot`);
+      if (a.action === 'click_ref') {
+        await page.click(entry.selector, { timeout: 10000 });
+        result = { ok: true, index: a.index, selector: entry.selector };
+      } else {
+        if (state === 'password') throw new Error('denied: refusing to type into a password field — sign-ins are the user\'s own act');
+        await page.fill(entry.selector, a.text, { timeout: 10000 });
+        result = { ok: true, index: a.index, selector: entry.selector };
+      }
+    } else if (a.action === 'find_text') {
+      const count = await page.getByText(a.text).count();
+      if (count > 0) await page.getByText(a.text).first().scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+      result = { ok: true, text: a.text, count, found: count > 0 };
+    } else if (a.action === 'click_text') {
+      const count = await page.getByText(a.text).count();
+      if (count === 0) throw new Error(`text not found on page: ${a.text.slice(0, 100)}`);
+      if (count > 1) throw new Error(`ambiguous: ${count} matches for "${a.text.slice(0, 100)}" — take a snapshot and use click_ref`);
+      await page.getByText(a.text).first().click({ timeout: 10000 });
+      result = { ok: true, text: a.text };
     }
-    audit('browser.' + a.action, { action: a.action, url: this.currentUrl, selector: a.selector }, true, 'browser ok');
+    audit('browser.' + a.action, { action: a.action, url: this.currentUrl, selector: a.selector, index: a.index }, true, 'browser ok');
     return result;
+  }
+
+  // Resolve a snapshot index to its entry. Fails when there is no snapshot
+  // or the page has navigated since the snapshot was taken.
+  resolveRef(index, page) {
+    if (!this.lastSnapshot) throw new Error('no snapshot — run the snapshot action first, then act by reference');
+    const now = pageUrl(page, this);
+    if (this.lastSnapshot.url && now && this.lastSnapshot.url !== now) {
+      throw new Error('page changed since the snapshot — take a fresh snapshot');
+    }
+    const entry = this.lastSnapshot.entries[index];
+    if (!entry) throw new Error(`snapshot has no index ${index} (0..${this.lastSnapshot.entries.length - 1})`);
+    return entry;
   }
 
   async close() {

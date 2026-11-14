@@ -7,6 +7,9 @@
 // never silently overwritten), settings (key/value — freeze state, device id).
 // Sync columns: messages/jobs/notes/approvals gain device_id + updated_at
 // (added by migration below if an older DB exists) for last-write-wins sync.
+// Notifications, screen sessions/steps, settings, outbox, and audit_log
+// are NEVER synced: screenshots and keys must not leave the device, and
+// queue/audit state is local by design (see sync.js SYNC_TABLES).
 'use strict';
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
@@ -87,6 +90,28 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY, value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
+    read_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS screen_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task TEXT NOT NULL, device TEXT NOT NULL DEFAULT 'desktop',
+    status TEXT NOT NULL DEFAULT 'running',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS screen_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES screen_sessions(id),
+    step_index INTEGER NOT NULL,
+    action TEXT NOT NULL, args_json TEXT NOT NULL DEFAULT '{}',
+    result TEXT, screenshot_hash TEXT, shot_path TEXT,
+    latency_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
 

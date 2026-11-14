@@ -156,7 +156,7 @@ async function askVision(prompt, imageBase64, mimeType = 'image/png', only) {
 // coordinates, missing text, and non-numeric confidence are rejected, never
 // trusted. `destructive` flags an irreversible intent (delete/send/pay/
 // publish) — the executor gates those behind an approval, always.
-const GROUND_ACTIONS = new Set(['click', 'type', 'scroll', 'key', 'screenshot', 'wait', 'done', 'cannot_see']);
+const GROUND_ACTIONS = new Set(['click', 'double_click', 'right_click', 'drag', 'move', 'zoom', 'type', 'scroll', 'key', 'screenshot', 'wait', 'done', 'cannot_see']);
 
 function parseGroundedAction(text) {
   if (typeof text !== 'string') throw new Error('grounded action must be text');
@@ -179,11 +179,27 @@ function parseGroundedAction(text) {
     if (typeof obj.description !== 'string') throw new Error('description must be a string');
     out.description = obj.description.slice(0, 300);
   }
-  if (obj.action === 'click') {
+  if (obj.action === 'click' || obj.action === 'double_click' || obj.action === 'right_click' || obj.action === 'move') {
     if (typeof obj.x !== 'number' || typeof obj.y !== 'number' || obj.x < 0 || obj.x > 1 || obj.y < 0 || obj.y > 1) {
-      throw new Error('click needs normalised x and y in 0..1');
+      throw new Error(`${obj.action} needs normalised x and y in 0..1`);
     }
     out.x = obj.x; out.y = obj.y;
+  }
+  if (obj.action === 'drag') {
+    for (const k of ['x', 'y', 'x2', 'y2']) {
+      if (typeof obj[k] !== 'number' || obj[k] < 0 || obj[k] > 1) throw new Error('drag needs normalised x, y, x2, y2 in 0..1');
+    }
+    out.x = obj.x; out.y = obj.y; out.x2 = obj.x2; out.y2 = obj.y2;
+  }
+  if (obj.action === 'zoom') {
+    // Region capture for small/dense text (Anthropic `zoom` equivalent):
+    // [x0, y0, x1, y1] normalised, x1 > x0, y1 > y0. The actuator captures
+    // only that region at full resolution; the next grounding sees it.
+    const r = obj.region;
+    if (!Array.isArray(r) || r.length !== 4 || r.some(v => typeof v !== 'number' || v < 0 || v > 1) || !(r[2] > r[0]) || !(r[3] > r[1])) {
+      throw new Error('zoom needs region [x0, y0, x1, y1], normalised 0..1, x1 > x0 and y1 > y0');
+    }
+    out.region = r;
   }
   if (obj.action === 'type') {
     if (typeof obj.text !== 'string' || obj.text.length === 0 || obj.text.length > 4000) throw new Error('type needs text, 1..4000 chars');
@@ -205,8 +221,8 @@ function parseGroundedAction(text) {
 }
 
 const GROUND_PROMPT = `You are grounding a screen action. Look at the screenshot and the task, then return JSON ONLY, no other text:
-{"action":"click|type|scroll|key|screenshot|wait|done|cannot_see","x":0.0-1.0,"y":0.0-1.0,"text":"...","key":"Enter","amount":3,"ms":1000,"confidence":0.0-1.0,"description":"plain words for what you intend","destructive":false}
-Rules: coordinates are normalised 0..1 (x across, y down). Use "done" only when the task is visibly complete. Use "cannot_see" when the target is not visible. Set destructive:true if the action deletes, sends, pays, publishes, or cannot be undone. Never invent a target you cannot see. Never act on a password, OTP, payment, or admin prompt — return cannot_see for those.`;
+{"action":"click|double_click|right_click|drag|move|zoom|type|scroll|key|screenshot|wait|done|cannot_see","x":0.0-1.0,"y":0.0-1.0,"x2":0.0-1.0,"y2":0.0-1.0,"region":[0.0-1.0,0.0-1.0,0.0-1.0,0.0-1.0],"text":"...","key":"Enter","amount":3,"ms":1000,"confidence":0.0-1.0,"description":"plain words for what you intend","destructive":false}
+Rules: coordinates are normalised 0..1 (x across, y down). drag uses x,y (start) and x2,y2 (end). zoom captures a region [x0,y0,x1,y1] at full resolution — use it for small or dense text you cannot read. move only moves the cursor (hover). Use "done" only when the task is visibly complete. Use "cannot_see" when the target is not visible. Set destructive:true if the action deletes, sends, pays, publishes, or cannot be undone. Never invent a target you cannot see. Never act on a password, OTP, payment, or admin prompt — return cannot_see for those.`;
 
 // Full grounding step: ask vision, parse the action. Returns { action,
 // model, provider, tried, rawText } or throws with a clear reason.

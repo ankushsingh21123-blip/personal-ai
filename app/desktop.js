@@ -23,7 +23,7 @@ const { get } = require('./db');
 const MAX_ACTIONS = 20;
 const MAX_UNCHANGED = 2;
 
-const SCREEN_ACTIONS = new Set(['click', 'type', 'scroll', 'key', 'screenshot', 'wait']);
+const SCREEN_ACTIONS = new Set(['click', 'double_click', 'right_click', 'drag', 'move', 'zoom', 'type', 'scroll', 'key', 'screenshot', 'wait']);
 
 // Validate a screen action before anything executes. Throws on anything
 // outside the allowlist. `approvalId` is required when destructive=true —
@@ -39,11 +39,24 @@ function validateAction(action, opts = {}) {
     if (!row || row.status !== 'approved') throw new Error('denied: approval not found or not approved — destructive screen action refused');
   }
   const out = { action: action.action, destructive: !!action.destructive };
-  if (action.action === 'click') {
+  if (action.action === 'click' || action.action === 'double_click' || action.action === 'right_click' || action.action === 'move') {
     if (typeof action.x !== 'number' || typeof action.y !== 'number' || action.x < 0 || action.x > 1 || action.y < 0 || action.y > 1) {
-      throw new Error('click needs normalised x and y in 0..1');
+      throw new Error(`${action.action} needs normalised x and y in 0..1`);
     }
     out.x = action.x; out.y = action.y;
+  }
+  if (action.action === 'drag') {
+    for (const k of ['x', 'y', 'x2', 'y2']) {
+      if (typeof action[k] !== 'number' || action[k] < 0 || action[k] > 1) throw new Error('drag needs normalised x, y, x2, y2 in 0..1');
+    }
+    out.x = action.x; out.y = action.y; out.x2 = action.x2; out.y2 = action.y2;
+  }
+  if (action.action === 'zoom') {
+    const r = action.region;
+    if (!Array.isArray(r) || r.length !== 4 || r.some(v => typeof v !== 'number' || v < 0 || v > 1) || !(r[2] > r[0]) || !(r[3] > r[1])) {
+      throw new Error('zoom needs region [x0, y0, x1, y1], normalised 0..1, x1 > x0 and y1 > y0');
+    }
+    out.region = r;
   }
   if (action.action === 'type') {
     if (typeof action.text !== 'string' || action.text.length === 0 || action.text.length > 4000) throw new Error('type needs text, 1..4000 chars');
@@ -166,6 +179,17 @@ async function screenLoop(task, deps, opts = {}) {
     actions++;
     steps.push({ step, action: validated.action, description: validated.description || grounded.description || '', result: result?.ok !== false });
     latencies.push({ step, captureMs: tCapture - t0, groundMs: tGround - tCapture, actMs: tAct - tGround });
+    // Replay recorder (opt-in): records the pre-action observation shot +
+    // the action, so the session can be audited and verified-replayed
+    // later. A recorder failure never breaks the loop — it is logged via
+    // the audit trail, not thrown.
+    if (opts.recorder) {
+      try {
+        await opts.recorder.record({ action: validated, shot, result, latencyMs: tAct - tGround });
+      } catch (e) {
+        (deps.audit || audit)('screen.replay_record_failed', { task: String(task).slice(0, 200) }, false, String(e.message).slice(0, 200));
+      }
+    }
     (deps.audit || audit)('screen.' + validated.action,
       { task: String(task).slice(0, 200), target: validated.description || '', x: validated.x, y: validated.y },
       true, `shot ${String(shot.hash).slice(0, 12)} action ${actions}/${maxActions}`);

@@ -1,1 +1,21 @@
-{"dependencies":{"express":"5.3.0","playwright":"1.65.1"},"description":"Ankush Singh's own personal AI — full working, $0. Frontend + backend + SQLite database + server, all wired up. Brain order: Gemini free -> Groq free -> Ollama local. Built on OpenClaw (gateway) + goose (coding agent) as bases; this app is Ankush's own gateway/UI on top, MIT/Apache-2.0 licences kept for the bases.","engines":{"node":">=24.22.1 <25"},"main":"server.js","name":"ankush-personal-ai","private":true,"scripts":{"security":"bash scripts/security-check.sh","start":"node server.js","test":"node --test tests/test.js tests/providers.test.js tests/phases.test.js"},"type":"commonjs","version":"1.0.0"}
+{
+  "dependencies": {
+    "express": "5.3.0",
+    "playwright": "1.65.1"
+  },
+  "description": "Ankush Singh's own personal AI — full working, $0. Frontend + backend + SQLite database + server, all wired up. Brain order: Gemini free -> Groq free -> Ollama local. Built on OpenClaw (gateway) + goose (coding agent) as bases; this app is Ankush's own gateway/UI on top, MIT/Apache-2.0 licences kept for the bases.",
+  "engines": {
+    "node": ">=24.22.1 <25"
+  },
+  "main": "server.js",
+  "name": "ankush-personal-ai",
+  "private": true,
+  "scripts": {
+    "security": "bash scripts/security-check.sh",
+    "start": "node server.js",
+    "test": "node --test tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js",
+    "doctor": "node doctor.js"
+  },
+  "type": "commonjs",
+  "version": "1.0.0"
+}

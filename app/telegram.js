@@ -15,9 +15,19 @@
 // Incoming text is DATA, never instructions: the handler runs the same
 // deny-first tools as a chat turn. Only the configured chat id may talk to
 // the bot (TELEGRAM_CHAT_ID, set after the first /start) — anyone else gets
-// no reply at all. HONEST STATUS: unit-tested with mocked fetch only; no
-// live bot run is proven (no token on this VM).
+// no reply at all.
+// KEYS ARE NEVER ACCEPTED IN CHAT: a message that looks like an API key is
+// refused before it reaches the agent turn, never stored, never forwarded.
+// The reply points at the Settings page (loopback web UI), the only place
+// keys are added. /providers shows STATUS only (configured/missing, masked
+// preview, last test result) — never a full key.
+// HONEST STATUS: unit-tested with mocked fetch only; no live bot run is
+// proven (no token on this VM).
 'use strict';
+
+const { looksLikeSecret } = require('./secrets');
+
+const KEY_REFUSAL = 'I cannot accept API keys in chat — chat history must never hold a key. Add it in the Settings page of the web UI (open the app on the laptop, Settings → Providers), or edit .env.local directly. Use /providers to see which providers are configured.';
 
 const API = 'https://api.telegram.org/bot';
 
@@ -80,9 +90,27 @@ class TelegramBot {
     const text = msg.text.trim();
     if (!text) return { handled: false };
 
+    // Key refusal: BEFORE any command or agent handling. A pasted key is
+    // never forwarded to the agent turn and never stored — the message is
+    // refused with instructions for the Settings page.
+    if (looksLikeSecret(text)) {
+      await this.sendMessage(fromId, KEY_REFUSAL);
+      return { handled: true, command: 'key_refused' };
+    }
+
     if (text === '/start') {
-      await this.sendMessage(fromId, 'Ankush\'s Personal AI here. Send any message and I will work on it like a chat turn. Commands: /status /freeze /unfreeze /approve <id> /reject <id>. I never send, post or spend — approvals are drafts only.');
+      await this.sendMessage(fromId, 'Piplet — Ankush\'s Personal AI here. Send any message and I will work on it like a chat turn. Commands: /status /providers /freeze /unfreeze /approve <id> /reject <id>. I never send, post or spend — approvals are drafts only. Never paste API keys here — use the Settings page.');
       return { handled: true, command: 'start' };
+    }
+    if (text === '/providers' && this.handlers.getProviderStatus) {
+      const rows = await this.handlers.getProviderStatus();
+      const lines = (rows || []).map(p => {
+        const state = p.configured ? `configured ${p.masked || ''}` : 'missing';
+        const test = p.lastTest ? (p.lastTest.ok ? `last test OK (${p.lastTest.ms ?? '?'}ms)` : 'last test FAILED') : 'never tested';
+        return `${p.label}: ${state} — ${test}`;
+      });
+      await this.sendMessage(fromId, `Providers (status only — keys are added in the Settings page):\n${lines.join('\n')}`);
+      return { handled: true, command: 'providers' };
     }
     if (text === '/status' && this.handlers.getStatus) {
       const s = await this.handlers.getStatus();
@@ -132,4 +160,4 @@ class TelegramBot {
   }
 }
 
-module.exports = { TelegramBot };
+module.exports = { TelegramBot, KEY_REFUSAL };

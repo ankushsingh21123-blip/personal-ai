@@ -3,17 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ankush's Personal AI</title>
+<title>Piplet — Ankush's Personal AI</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
-  <h1>Ankush's Personal AI</h1>
+  <h1><img src="logo.svg" alt="Piplet logo" id="logo"> Piplet <small>Ankush's Personal AI</small></h1>
   <p>Full working, $0 — frontend + backend + database + server, wired up. Brain: Gemini free → Groq free → Ollama local.</p>
   <div id="status">Loading status…</div>
   <p><button id="freeze-btn">Freeze agent</button> <span id="freeze-state"></span></p>
 </header>
 <main>
+  <section id="settings-box">
+    <h2>Settings — API keys &amp; providers</h2>
+    <p class="hint">Keys are stored only in <code>.env.local</code> on this machine (mode 600, never synced, never logged). Full keys are never shown back — only the last 4 characters. Where to get free keys: see <code>docs/API-KEYS.md</code> in the repo. Never paste a key in chat, Telegram, or WhatsApp — this page is the only place keys are entered.</p>
+    <div id="settings"></div>
+    <h3>Provider order</h3>
+    <p class="hint">First provider that answers wins. Unknown names are ignored; providers with no key are skipped.</p>
+    <form id="order-form">
+      <input id="order-input" maxlength="200" placeholder="gemini,groq,ollama">
+      <button type="submit">Save order</button>
+    </form>
+    <h3>Fast routing</h3>
+    <label><input type="checkbox" id="fast-routing"> Fast routing (routine text steps try the local model first; hard work always uses the full chain — off by default)</label>
+    <h3>Channels &amp; sync</h3>
+    <div id="channels"></div>
+  </section>
   <section id="chat-box">
     <h2>Chat — perceive → reason → act</h2>
     <div id="messages"></div>
@@ -21,7 +36,24 @@
       <input id="chat-input" maxlength="4000" placeholder="Ask me to list files, read AGENT.md, write a note, run 'date'… — I never send, post or spend without a draft first." autocomplete="off">
       <button type="submit">Send</button>
     </form>
-    <p class="hint">Your token is in <code>.env.local</code> (git-ignored). This page is served from 127.0.0.1 only — it never leaves your machine.</p>
+    <p class="hint">Never paste API keys in chat — use Settings above. Your token is in <code>.env.local</code> (git-ignored). This page is served from 127.0.0.1 only — it never leaves your machine.</p>
+  </section>
+  <section>
+    <h2>Notifications — things to look at when you are back</h2>
+    <button id="refresh-notifications">Refresh notifications</button>
+    <ul id="notifications"></ul>
+  </section>
+  <section>
+    <h2>Sync — this device &amp; the cloud node</h2>
+    <button id="refresh-sync">Refresh sync</button>
+    <div id="sync-status"></div>
+  </section>
+  <section>
+    <h2>Replay — screen sessions, audited step by step</h2>
+    <p class="hint">Screenshots stay on this device (data/shots/, never synced). Replay is verified: it stops at the first screen that does not match the recording, and destructive steps need fresh approval.</p>
+    <button id="refresh-replay">Refresh sessions</button>
+    <ul id="replay"></ul>
+    <div id="replay-detail"></div>
   </section>
   <section>
     <h2>Jobs (from the database)</h2>

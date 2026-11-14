@@ -36,7 +36,7 @@ const path = require('path');
 // default PATH on this VM / on a fresh laptop install. Add both.
 process.env.PATH = `${require('os').homedir()}/.local/bin:${require('os').homedir()}/.npm-global/bin:${process.env.PATH}`;
 
-const { all, get, run } = require('./db');
+const { all, get, run, getSetting, setSetting } = require('./db');
 const brain = require('./brain');
 const tools = require('./tools');
 // Phases B–E (14 Nov 2026): screen vision + desktop control, phone,
@@ -52,6 +52,13 @@ const phone = require('./phone');
 const browserMod = require('./browser');
 const { TelegramBot } = require('./telegram');
 const whatsapp = require('./whatsapp');
+// Product expansion (14 Nov 2026): settings/API keys, notifications,
+// replay log, fast routing, secret handling.
+const settings = require('./settings');
+const notifyMod = require('./notify');
+const replay = require('./replay');
+const routeMod = require('./route');
+const { redact } = require('./secrets');
 
 // --- .env.local (git-ignored) ------------------------------------------------
 const ENV_PATH = path.join(__dirname, '.env.local');
@@ -82,7 +89,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'");
   next();
 });
 app.use(express.json({ limit: '100kb' }));
@@ -91,13 +98,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 // H5 fix (security audit 12 Nov 2026): rate-limit the whole API, not just
 // chat/tools — /api/brain/test can burn free-tier quota and hang for minutes.
 const hits = new Map();
+// Default 60 req/min/IP. The test runner raises it (RATE_LIMIT_PER_MIN=300)
+// because the suite legitimately makes >60 calls in a minute against the
+// shared test server; production default is unchanged. Clamped 1..10000.
+const RATE_LIMIT_PER_MIN = Math.min(Math.max(Number(process.env.RATE_LIMIT_PER_MIN || 60) || 60, 1), 10000);
 function rateLimit(req, res, next) {
   const now = Date.now();
   const key = req.ip || 'local';
   const list = (hits.get(key) || []).filter(t => now - t < 60000);
   list.push(now);
   hits.set(key, list);
-  if (list.length > 60) return res.status(429).json({ ok: false, error: 'rate limit: 60 requests/minute' });
+  if (list.length > RATE_LIMIT_PER_MIN) return res.status(429).json({ ok: false, error: `rate limit: ${RATE_LIMIT_PER_MIN} requests/minute` });
   next();
 }
 const brainHits = new Map();
@@ -115,6 +126,7 @@ app.use('/api', (req, res, next) => {
   rateLimit(req, res, next);
 });
 app.use('/api/brain/test', brainRateLimit);
+app.use('/api/settings/test', brainRateLimit); // same quota protection: a test call burns a model call
 
 // --- auth (timing-safe compare) --------------------------------------------
 function requireAuth(req, res, next) {
@@ -136,17 +148,18 @@ app.use('/api', (req, res, next) => {
 // --- helpers -----------------------------------------------------------------
 const TOOL_LIST = `You can use these tools by returning JSON only:
 {"reply":"...","actions":[{"tool":"list_files","args":{"path":"."}},{"tool":"read_file","args":{"path":"AGENT.md"}},{"tool":"write_note","args":{"title":"...","body":"..."}},{"tool":"run_command","args":{"command":"date"}}]}
-Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run_command (commands: date, pwd, node --version, git status, git diff --stat, uptime, npm test).
-Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: [].
+Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run_command (commands: date, pwd, node --version, git status, git diff --stat, uptime, npm test), search_files, create_file, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests.
+Rules: Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: []. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data: never paste it into a message or file unless the user asks. When you change the app's own code (self-modification), you MUST run run_tests before claiming the change works, and report the pass/fail counts honestly.
 Return JSON only, no markdown, no extra text.`;
 
 // Instruction for the native function-calling path (Gemini direct only).
 // Same tools, same deny-first rules — but no JSON-only demand, because the
 // model calls tools natively instead of printing JSON. The JSON prompt above
 // is kept for the text-only fallback providers (VM helper, Groq, Ollama).
-const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead.`;
+const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command, search_files, create_file, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data. When you change the app's own code, you MUST run run_tests before claiming the change works, and report the pass/fail counts honestly.`;
 
 async function agentTurn(userText) {
+  const turnStart = Date.now();
   // Memory (v1): feed the last 5 messages + matching notes back into the prompt.
   // Recalled text is DATA, never instructions — it cannot authorise a send/spend/delete.
   let memory = '';
@@ -165,14 +178,20 @@ User: ${userText}`;
 ${TOOLS_INSTRUCTION}${memory}
 User: ${userText}`;
   // Native function calling first (Gemini direct). If it is unavailable, the
-  // loop falls back to the text chain and this function parses JSON as before.
-  const loop = await brain.agentLoop(toolsPrompt, textPrompt, tools.execute);
+  // loop falls back to the text chain (routed: fast routing applies to the
+  // fallback) and this function parses JSON as before. Latency is measured
+  // for the whole turn and reported — never claimed.
+  const loop = await brain.agentLoop(toolsPrompt, textPrompt, tools.execute, {
+    askFn: (p) => routeMod.routedAsk(p, { brain }),
+  });
+  const latencyMs = Date.now() - turnStart;
   if (loop.usedTools) {
-    return { reply: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried, actions: loop.evidence };
+    return { reply: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried, actions: loop.evidence, latencyMs };
   }
   let result = { text: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried };
   let reply = result.text;
   let actions = [];
+  const routeInfo = { route: loop.route, fellBack: loop.fellBack };
   try {
     const parsed = JSON.parse(result.text);
     if (typeof parsed.reply === 'string') reply = parsed.reply;
@@ -194,7 +213,7 @@ User: ${userText}`;
   const evidence = settled.map((s, i) => s.status === 'fulfilled'
     ? { tool: actions[i].tool, ok: true, result: JSON.stringify(s.value).slice(0, 2000) }
     : { tool: actions[i].tool, ok: false, error: String(s.reason?.message || s.reason).slice(0, 300) });
-  return { reply, model: result.model, provider: result.provider, tried: result.tried, actions: evidence };
+  return { reply, model: result.model, provider: result.provider, tried: result.tried, actions: evidence, route: routeInfo.route, fellBack: routeInfo.fellBack, latencyMs: Date.now() - turnStart };
 }
 
 // --- routes ------------------------------------------------------------------
@@ -246,6 +265,16 @@ app.get('/api/status', async (req, res) => {
       jobs: get('SELECT COUNT(*) c FROM jobs').c,
       notes: get('SELECT COUNT(*) c FROM notes').c,
       approvals_pending: get("SELECT COUNT(*) c FROM approvals WHERE status='pending'").c,
+      notifications_unread: notifyMod.unreadCount(),
+      replay_sessions: get('SELECT COUNT(*) c FROM screen_sessions').c,
+    },
+    fast_routing: routeMod.routingEnabled(),
+    sync: {
+      peer_configured: !!(process.env.SYNC_PEER_URL && process.env.SYNC_TOKEN),
+      last_push_sent: getSetting('last_sync_push_sent'),
+      last_push_received: getSetting('last_sync_push_received'),
+      last_pull: getSetting('last_sync_pull'),
+      conflicts: get('SELECT COUNT(*) c FROM sync_conflicts').c,
     },
   });
 });
@@ -263,8 +292,8 @@ app.post('/api/chat', async (req, res) => {
     const turn = await agentTurn(text);
     run('INSERT INTO messages (role, content, model, provider) VALUES (?, ?, ?, ?)', 'assistant', turn.reply, turn.model, turn.provider);
     const job = run('INSERT INTO jobs (task, status, model, provider, evidence) VALUES (?, ?, ?, ?, ?)',
-      text.slice(0, 500), 'done', turn.model, turn.provider, JSON.stringify(turn.actions));
-    res.json({ ok: true, job_id: Number(job.lastInsertRowid), reply: turn.reply, model: turn.model, provider: turn.provider, tried: turn.tried, actions: turn.actions });
+      text.slice(0, 500), 'done', turn.model, turn.provider, JSON.stringify({ actions: turn.actions, latencyMs: turn.latencyMs, route: turn.route, fellBack: turn.fellBack }));
+    res.json({ ok: true, job_id: Number(job.lastInsertRowid), reply: turn.reply, model: turn.model, provider: turn.provider, tried: turn.tried, actions: turn.actions, route: turn.route, latencyMs: turn.latencyMs });
   } catch (e) {
     run('INSERT INTO jobs (task, status, evidence) VALUES (?, ?, ?)', text.slice(0, 500), 'failed', 'brain failed');
     console.error('[personal-ai] chat failed:', e.message);
@@ -376,6 +405,7 @@ async function defaultOutboxWorker(kind, payload) {
       signal: AbortSignal.timeout(30000),
     });
     if (!r.ok) throw new Error(`sync peer HTTP ${r.status}`);
+    setSetting('last_sync_push_sent', new Date().toISOString());
     return r.json();
   }
   if (kind === 'routine_run') {
@@ -441,13 +471,21 @@ app.post('/api/screen/act', async (req, res) => {
   try {
     const client = new desktop.DesktopAgentClient({});
     const out = await client.act(req.body?.action || {}, { approvalId: req.body?.approval_id });
+    tools.audit('screen.act', { action: req.body?.action?.action }, true, 'screen action ok');
     res.json({ ok: true, ...out });
-  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+  } catch (e) {
+    tools.audit('screen.act', { action: req.body?.action?.action }, false, String(e.message).slice(0, 200));
+    res.status(403).json({ ok: false, error: e.message });
+  }
 });
 app.post('/api/screen/loop', async (req, res) => {
   const task = typeof req.body?.task === 'string' ? req.body.task.trim() : '';
   if (!task || task.length > 4000) return res.status(400).json({ ok: false, error: 'task required, max 4000 chars' });
   const client = new desktop.DesktopAgentClient({});
+  // Replay recorder: every step's observation + action is recorded locally
+  // (data/shots/, git-ignored). A recorder failure never breaks the loop.
+  let recorder = null;
+  try { recorder = replay.createRecorder(task, { device: 'desktop' }); } catch (e) { console.error('[personal-ai] replay recorder failed to start:', e.message); }
   try {
     const out = await desktop.screenLoop(task, {
       capture: async () => {
@@ -462,11 +500,15 @@ app.post('/api/screen/loop', async (req, res) => {
       },
       ground: async (t, imageBase64) => (await vision.groundAction(t, imageBase64, 'image/png')).action,
       act: (a) => client.act(a, { approvalId: req.body?.approval_id }),
-    }, { maxActions: req.body?.max_actions, approvalId: req.body?.approval_id });
+    }, { maxActions: req.body?.max_actions, approvalId: req.body?.approval_id, recorder });
+    try { recorder?.finish(out.done ? 'done' : 'stopped'); } catch {}
     run('INSERT INTO jobs (task, status, model, provider, evidence) VALUES (?, ?, ?, ?, ?)',
-      `[screen loop] ${task}`.slice(0, 500), out.done ? 'done' : 'stopped', null, null, JSON.stringify({ stopReason: out.stopReason, steps: out.steps, latencies: out.latencies }).slice(0, 5000));
-    res.json({ ok: true, ...out });
-  } catch (e) { res.status(503).json({ ok: false, error: e.message }); }
+      `[screen loop] ${task}`.slice(0, 500), out.done ? 'done' : 'stopped', null, null, JSON.stringify({ stopReason: out.stopReason, steps: out.steps, latencies: out.latencies, replaySessionId: recorder?.sessionId }).slice(0, 5000));
+    res.json({ ok: true, replay_session_id: recorder?.sessionId || null, ...out });
+  } catch (e) {
+    try { recorder?.finish('failed'); } catch {}
+    res.status(503).json({ ok: false, error: e.message });
+  }
 });
 
 // --- phone (Phase C) -----------------------------------------------------------
@@ -506,13 +548,145 @@ app.post('/api/sync/push', (req, res) => {
     return res.status(400).json({ ok: false, error: 'device_id and records required' });
   }
   const result = sync.mergeIncoming(records, device_id.slice(0, 100));
+  setSetting('last_sync_push_received', new Date().toISOString());
   res.json({ ok: true, ...result });
 });
 app.get('/api/sync/pull', (req, res) => {
   const since = typeof req.query.since === 'string' ? req.query.since : null;
+  setSetting('last_sync_pull', new Date().toISOString());
   res.json({ ok: true, device_id: sync.thisDeviceId(), records: sync.recordsSince(since) });
 });
 app.get('/api/sync/conflicts', (req, res) => res.json({ ok: true, conflicts: sync.listConflicts(50) }));
+app.get('/api/sync/status', (req, res) => res.json({
+  ok: true,
+  device_id: sync.thisDeviceId(),
+  peer_configured: !!(process.env.SYNC_PEER_URL && process.env.SYNC_TOKEN),
+  peer_url: process.env.SYNC_PEER_URL || null,
+  last_push_sent: getSetting('last_sync_push_sent'),
+  last_push_received: getSetting('last_sync_push_received'),
+  last_pull: getSetting('last_sync_pull'),
+  conflicts: get('SELECT COUNT(*) c FROM sync_conflicts').c,
+  synced_tables: sync.SYNC_TABLES,
+  never_synced: ['notifications', 'screen_sessions', 'screen_steps', 'settings', 'outbox', 'audit_log'],
+  note: 'Screenshots and keys never sync. Only messages, jobs, notes, and approvals sync, last-write-wins.',
+}));
+
+// --- settings: API keys + provider order + channels (loopback + token auth)
+// Keys are written to .env.local (git-ignored, mode 600) via settings.js and
+// mirrored into process.env — no restart needed. Responses carry masked
+// previews (last 4 chars) only, never full keys. ANKU_TOKEN is not settable.
+app.get('/api/settings/providers', (req, res) => res.json({
+  ok: true,
+  providers: settings.getProviderStatus(),
+  order: settings.getOrder(),
+  channels: settings.getChannelStatus(),
+  fast_routing: routeMod.routingEnabled(),
+  guide: 'docs/API-KEYS.md — where to get free keys, what each tier gives',
+}));
+app.post('/api/settings/providers', (req, res) => {
+  const updates = req.body?.updates;
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return res.status(400).json({ ok: false, error: 'updates object required, e.g. {"GEMINI_API_KEY": "…"} — empty string removes a key' });
+  }
+  try {
+    const changed = settings.writeEnvUpdates(updates);
+    res.json({ ok: true, changed, providers: settings.getProviderStatus(), order: settings.getOrder(), channels: settings.getChannelStatus() });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.post('/api/settings/order', (req, res) => {
+  const order = req.body?.order;
+  if (typeof order !== 'string' || !order.trim()) return res.status(400).json({ ok: false, error: 'order string required, e.g. "gemini,groq,ollama"' });
+  try {
+    settings.writeEnvUpdates({ BRAIN_PROVIDERS: order });
+    res.json({ ok: true, order: settings.getOrder() });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.post('/api/settings/fast-routing', (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'enabled must be a boolean' });
+  try {
+    settings.writeEnvUpdates({ FAST_ROUTING: enabled ? '1' : '0' });
+    res.json({ ok: true, fast_routing: routeMod.routingEnabled() });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+const SETTINGS_TEST_MAP = { gemini: 'gemini-direct', groq: 'groq', openai: 'openai', anthropic: 'anthropic', ollama: 'ollama' };
+app.post('/api/settings/test', async (req, res) => {
+  const id = req.body?.provider;
+  const brainName = SETTINGS_TEST_MAP[id];
+  if (!brainName) return res.status(400).json({ ok: false, error: 'provider must be one of: gemini, groq, openai, anthropic, ollama' });
+  const t0 = Date.now();
+  try {
+    const r = await brain.ask('Reply with the word OK only.', brainName);
+    const lastTest = settings.recordTestResult(id, { ok: true, model: r.model, provider: r.provider, ms: Date.now() - t0 });
+    res.json({ ok: true, provider: id, model: r.model, ms: Date.now() - t0, lastTest });
+  } catch (e) {
+    const lastTest = settings.recordTestResult(id, { ok: false, ms: Date.now() - t0, error: redact(e.message) });
+    res.status(500).json({ ok: false, provider: id, error: redact(e.message), lastTest });
+  }
+});
+
+// --- notifications: local inbox ---------------------------------------------
+app.get('/api/notifications', (req, res) => res.json({
+  ok: true,
+  unread: notifyMod.unreadCount(),
+  notifications: notifyMod.listNotifications({ unreadOnly: req.query.unread === '1', limit: Number(req.query.limit) || 50 }),
+}));
+app.post('/api/notifications', (req, res) => {
+  try {
+    const n = notifyMod.createNotification(req.body?.title, req.body?.body || '', req.body?.source || 'api');
+    res.json({ ok: true, notification: n });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.post('/api/notifications/:id/read', (req, res) => {
+  try { res.json({ ok: true, ...notifyMod.markNotificationRead(req.params.id) }); }
+  catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+// --- replay: audit + verified replay of screen sessions ----------------------
+app.get('/api/replay', (req, res) => res.json({ ok: true, sessions: replay.listSessions({ limit: Number(req.query.limit) || 20 }) }));
+app.get('/api/replay/:id', (req, res) => {
+  try {
+    const s = replay.getSession(req.params.id);
+    if (!s) return res.status(404).json({ ok: false, error: 'session not found' });
+    res.json({ ok: true, session: s });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.get('/api/replay/shot/:stepId', (req, res) => {
+  try {
+    const shot = replay.getShot(req.params.stepId);
+    if (!shot) return res.status(404).json({ ok: false, error: 'screenshot not found (pruned or never recorded)' });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(shot.buffer);
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.delete('/api/replay/:id', (req, res) => {
+  try {
+    const out = replay.purgeSession(req.params.id);
+    if (!out.ok) return res.status(404).json({ ok: false, error: 'session not found' });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.post('/api/replay/:id/replay', async (req, res) => {
+  // Verified replay: stops at the first screen mismatch or refused
+  // destructive step. confirm_destructive=true is a FRESH approval for
+  // this replay only — the original approval never replays.
+  const client = new desktop.DesktopAgentClient({});
+  try {
+    const out = await replay.replaySession(req.params.id, {
+      capture: async () => {
+        try {
+          const s = await client.screenshot();
+          const buf = Buffer.from(s.imageBase64, 'base64');
+          return { buffer: buf, hash: screen.hashBuffer(buf) };
+        } catch { return screen.captureScreenshot(); }
+      },
+      act: (a) => client.act(a, { approvalId: req.body?.approval_id }),
+      confirmDestructive: () => req.body?.confirm_destructive === true,
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+});
 
 // --- messaging channels: status only (Telegram polls inside the server when
 // a token exists; WhatsApp starts manually — QR scan, spare number only) -------
@@ -552,6 +726,9 @@ if (process.env.TELEGRAM_ENABLED !== 'no') {
         queue: queue.counts(),
         approvals_pending: get("SELECT COUNT(*) c FROM approvals WHERE status='pending'").c,
       }),
+      // Provider STATUS only (masked previews) — keys are never shown or
+      // accepted in chat; the bot refuses pasted keys (see telegram.js).
+      getProviderStatus: async () => settings.getProviderStatus(),
       decideApproval: async (id, status) => {
         const row = get('SELECT * FROM approvals WHERE id = ?', id);
         if (!row) return { error: 'approval not found' };

@@ -78,6 +78,7 @@ test('chat: perceive -> reason (Gemini) -> act, job + message persisted in SQLit
   assert.ok(body.reply && body.reply.length > 10);
   assert.ok(body.model, 'no model recorded');
   assert.ok(body.job_id, 'no job id');
+  assert.ok(typeof body.latencyMs === 'number' && body.latencyMs >= 0, 'chat turn must report measured latencyMs');
   const jobs = await api('/api/jobs');
   assert.ok(jobs.body.jobs.some(j => j.id === body.job_id && j.status === 'done'));
   const msgs = await api('/api/messages');
@@ -174,7 +175,10 @@ test('frontend: index page served', async () => {
 
 test('brain: native tool declarations mirror the allowlisted tools exactly', async () => {
   const brain = require('../brain');
-  const expected = ['list_files', 'read_file', 'write_note', 'edit_file', 'web_fetch', 'run_command'];
+  const expected = ['list_files', 'read_file', 'write_note', 'edit_file', 'web_fetch', 'run_command',
+    'search_files', 'create_file', 'search_notes', 'notify', 'screenshot', 'screen_act',
+    'list_windows', 'focus_window', 'open_app', 'clipboard_get', 'clipboard_set',
+    'create_routine', 'list_routines', 'run_tests'];
   assert.deepEqual(brain.TOOL_DECLARATIONS.map(d => d.name).sort(), [...expected].sort());
   for (const d of brain.TOOL_DECLARATIONS) {
     assert.equal(typeof d.description, 'string');
@@ -187,7 +191,8 @@ test('brain: native tool declarations mirror the allowlisted tools exactly', asy
   // Every declared tool is recognised by the live deny-first executor:
   // calling it with empty args must NOT fail with "tool ... not allowlisted"
   // (it may fail on missing args — that proves it is recognised, not denied).
-  for (const name of expected) {
+  // run_tests is excluded from the live probe: it executes the whole suite.
+  for (const name of expected.filter(n => n !== 'run_tests')) {
     const r = await api('/api/tools', { method: 'POST', body: JSON.stringify({ tool: name, args: {} }) });
     if (r.status === 403) assert.doesNotMatch(r.body.error || '', /denied: tool '[^']+' is not allowlisted/);
   }

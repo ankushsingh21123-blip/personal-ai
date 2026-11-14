@@ -39,10 +39,48 @@ function validateSchedule(s) {
   throw new Error('schedule type must be "daily" or "interval"');
 }
 
+// Human-friendly schedule strings (the create_routine tool + chat turns):
+//   "09:00"            — daily at 09:00
+//   "09:00 mon-fri"    — weekdays only (also "mon,wed,fri", "weekdays", "weekends")
+//   "every 30m"        — interval, minutes >= 5
+// Objects pass through validateSchedule unchanged.
+const WEEKDAY_NAMES = { sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tuesday: 2, wed: 3, wednesday: 3, thu: 4, thursday: 4, fri: 5, friday: 5, sat: 6, saturday: 6 };
+function parseScheduleString(s) {
+  if (typeof s !== 'string' || !s.trim()) throw new Error('schedule must be an object or a string like "09:00", "09:00 mon-fri", or "every 30m"');
+  const t = s.trim().toLowerCase();
+  const interval = t.match(/^every\s+(\d+)\s*m(in)?$/);
+  if (interval) return validateSchedule({ type: 'interval', minutes: Number(interval[1]) });
+  const m = t.match(/^(\d{1,2}:\d{2})(?:\s+(.+))?$/);
+  if (!m) throw new Error('schedule string must look like "09:00", "09:00 mon-fri", or "every 30m"');
+  const time = m[1].padStart(5, '0');
+  if (!m[2]) return validateSchedule({ type: 'daily', time });
+  const part = m[2].trim();
+  let weekdays;
+  if (part === 'weekdays') weekdays = [1, 2, 3, 4, 5];
+  else if (part === 'weekends') weekdays = [0, 6];
+  else if (part === 'daily' || part === 'every day') weekdays = [0, 1, 2, 3, 4, 5, 6];
+  else {
+    weekdays = [];
+    for (const tok of part.split(/[,\s]+/).filter(Boolean)) {
+      const range = tok.match(/^([a-z]{3,9})-([a-z]{3,9})$/);
+      if (range) {
+        const a = WEEKDAY_NAMES[range[1]], b = WEEKDAY_NAMES[range[2]];
+        if (a === undefined || b === undefined) throw new Error(`unknown weekday in schedule: ${tok}`);
+        for (let d = a; ; d = (d + 1) % 7) { weekdays.push(d); if (d === b) break; }
+      } else {
+        const d = WEEKDAY_NAMES[tok];
+        if (d === undefined) throw new Error(`unknown weekday in schedule: ${tok}`);
+        weekdays.push(d);
+      }
+    }
+  }
+  return validateSchedule({ type: 'daily', time, weekdays });
+}
+
 // Next run strictly after `from` (server local time — the server runs in the
 // user's timezone; document it, don't pretend otherwise).
 function nextRunAfter(schedule, from = new Date()) {
-  const s = validateSchedule(schedule);
+  const s = typeof schedule === 'string' ? parseScheduleString(schedule) : validateSchedule(schedule);
   if (s.type === 'interval') {
     return new Date(from.getTime() + s.minutes * 60_000);
   }
@@ -63,7 +101,7 @@ function toSqlDate(d) {
 function createRoutine({ name, schedule, task, scope, approval_rule, missed_policy }) {
   if (typeof name !== 'string' || !name.trim() || name.length > 200) throw new Error('name required, max 200 chars');
   if (typeof task !== 'string' || !task.trim() || task.length > 4000) throw new Error('task required, max 4000 chars');
-  const s = validateSchedule(schedule);
+  const s = typeof schedule === 'string' ? parseScheduleString(schedule) : validateSchedule(schedule);
   const rule = approval_rule || 'default';
   if (!APPROVAL_RULES.has(rule)) throw new Error('approval_rule must be "default" or "strict" — routines can only be stricter, never looser');
   const missed = missed_policy || 'run_late';
@@ -190,4 +228,4 @@ async function tick(runner, opts = {}) {
   return { ran: results.length, skipped_frozen: false, results };
 }
 
-module.exports = { validateSchedule, nextRunAfter, createRoutine, getRoutine, listRoutines, setEnabled, deleteRoutine, runRoutine, tick, listRuns, APPROVAL_RULES, MISSED_POLICIES };
+module.exports = { validateSchedule, parseScheduleString, nextRunAfter, createRoutine, getRoutine, listRoutines, setEnabled, deleteRoutine, runRoutine, tick, listRuns, APPROVAL_RULES, MISSED_POLICIES };

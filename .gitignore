@@ -3,7 +3,13 @@
 node_modules/
 data/*.db
 data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/shots/
 *.log
 .openclaw/
 __pycache__/
 app/data/wa-auth/
+app/data/shots/
+app/data/*.db-shm
+app/data/*.db-wal

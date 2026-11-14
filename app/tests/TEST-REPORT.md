@@ -1,6 +1,17 @@
 # TEST-REPORT — Ankush's Personal AI app (full stack, wired up)
 
-## Latest run — 14 Nov 2026, ~16:30 IST (this VM)
+## Latest run — 14 Nov 2026, ~16:45 IST (this VM)
+- Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js`, stops it; `RATE_LIMIT_PER_MIN=300` for the test run only — the suite makes >60 calls/min against the shared test server, production default stays 60)
+- Node: v24.22.1, Express 5.3.0, Playwright 1.65.1 + Chromium headless shell 159.0.8154.6, Ollama 0.40.16 (qwen3:0.6b)
+- **Result: 113 passed, 0 failed, 0 skipped, exit 0, 31.1 s** (22 live-server Phase A tests + 12 mocked provider unit tests + 37 Phases B–E tests + 42 product-expansion tests)
+
+New in this run: the product expansion — Settings/API keys end to end (`settings.js` validated `.env.local` writer + `secrets.js` detection/masking/redaction + `/api/settings/*` routes + Settings UI panel), 14 new chat tools (20 total, declarations mirror updated), expanded screen actions (double/right-click, drag, move, zoom), expanded phone actions (long_press, open_app, list_apps, uiautomator dump), element-first browser actions (snapshot/click_ref/type_ref/find_text/click_text + back/forward), replay log (`replay.js`, sessions + PNG shots + verified replay), deterministic fast routing (`route.js`, off by default), notifications (`notify.js`), clipboard + window control (`clipboard.js`, `windows.js`), key refusal in Telegram/WhatsApp (`/providers` status-only), screen/act audit fix, per-turn latency recording, schedule strings for routines (`"09:00 mon-fri"`, `"every 30m"`), `doctor.js` + one-command setup scripts (`setup-app.sh` / `setup-app.ps1`), and security hardening (35 checks + `.githooks/pre-push` secret scan + `data/shots/` git-ignored). New tests #72–113 (`tests/product.test.js`): 33 unit tests (mocked/injected) + 9 live API tests.
+
+**Live-proven on this VM (new):** browser element-first path (real Chromium, local page: snapshot finds 4 elements with id-anchored selectors, click_text flips the title, type_ref fills the input, find_text counts); `run_tests` tool live-verified once via its real runner (nested full suite on port 3199: 113 pass, 0 fail, 29.5 s); Settings API round-trips (write + remove restore `.env.local`, order + fast-routing toggle, `/api/settings/test` hits live Ollama qwen3:0.6b and records the result); replay session serves steps + PNG over HTTP (auth required) and purges; notifications + sync-status endpoints; screen/act failures audit-logged; doctor run passes all required checks on the VM (adb correctly skipped); `setup-app.sh --dry-run` prints the full plan and changes nothing. **UNPROVEN live (unchanged boundary + new items):** vision round-trips; desktop-agent execution incl. the new actions (Windows-only); ADB control incl. the new actions (no device); Telegram/WhatsApp live runs incl. key refusal + `/providers` (no token/number); two-node sync; external browser `goto`; cloud-provider `/api/settings/test` (only Ollama tested live — no keys on VM); `setup-app.ps1` on Windows (never run on a laptop); `setup-app.sh` full (non-dry-run) path. Failures found and fixed in this loop: (1) the enlarged suite tripped the 60/min API rate limit (429s in previously-passing tests) — the limit is now env-configurable with the test runner raising it to 300, production default unchanged; (2) the snapshot selector builder never used the element's own id — fixed to anchor on `#id`; (3) `create_routine` rejected string schedules — `parseScheduleString` added (`"09:00"`, `"09:00 mon-fri"`, `"every 30m"`); (4) the declarations-mirror test updated to the 20-tool list (`run_tests` excluded from the live probe — it executes the suite). Security checks re-run same session: **ALL PASS** (35 checks: 34 pass + npm audit skipped — endpoint unreachable from this VM, as before; new checks cover staged-file + tracked-file secret scans, key refusal, the settings allowlist, CSP, the browser no-submit rule, 600 perms, and never-synced tables).
+
+Measured latencies this run: full suite 31.1 s; nested `run_tests` suite 29.5 s; browser element actions ~3.3 s (launch + snapshot + click + type on a local page). No "faster than all models" claim is made anywhere — latency is measured per turn (`latencyMs`) and per screen-loop step, and fast routing is off by default.
+
+## Earlier run — 14 Nov 2026, ~16:30 IST (this VM)
 - Command: `bash tests/run-tests.sh` (starts the live server on 127.0.0.1:3100, runs `node --test tests/test.js tests/providers.test.js tests/phases.test.js`, stops it)
 - Node: v24.22.1, Express 5.3.0, Playwright 1.65.1 + Chromium headless shell 159.0.8154.6, Ollama 0.40.16 (qwen3:0.6b)
 - **Result: 71 passed, 0 failed, 0 skipped, exit 0, 27.0 s** (22 live-server Phase A tests + 12 mocked provider unit tests + 37 new Phases B–E tests)
@@ -84,11 +95,12 @@ New in this run vs the 17-test run: audit Medium fixes — Gemini key now sent v
 
 ## What is NOT yet proven
 - Native function calling live end-to-end (needs GEMINI_API_KEY on the laptop — direct REST path; parser + declarations are unit-tested and the fallback is proven live, but no live functionCall round-trip has run yet).
-- OpenAI / Anthropic live round-trips (unit-tested with mocked fetch only; need a key on the laptop).
+- OpenAI / Anthropic live round-trips (unit-tested with mocked fetch only; need a key on the laptop). Cloud-provider `/api/settings/test` likewise unproven live (only Ollama tested).
 - Vision round-trips (Gemini/OpenAI/Anthropic image input — mocked fetch only; need a key + a screen on the laptop).
-- Desktop-agent execution (Windows-only; refuses to start on this VM; needs the laptop + `node desktop-agent.js`).
-- ADB phone control (no device on this VM; needs his Android phone + authorised debugging).
-- Telegram/WhatsApp live runs (need his bot token / spare number; guards + command handling unit-tested).
+- Desktop-agent execution, including the new actions (double/right-click, drag, move, zoom) and window/clipboard control (Windows-only; refuses to start on this VM; needs the laptop + `node desktop-agent.js`).
+- ADB phone control, including the new actions (long_press, open_app, list_apps, dump) (no device on this VM; needs his Android phone + authorised debugging).
+- Telegram/WhatsApp live runs, including key refusal and `/providers` (need his bot token / spare number; guards + command handling unit-tested).
 - Two-node sync (merge logic unit-tested, push/pull endpoints live-tested single-node; needs the Oracle cloud node).
-- External browser `goto` on this VM (egress proxy rejects Chromium CONNECT tunnels; launch + local render + read + screenshot proven live; `goto` needs the laptop).
+- External browser `goto` on this VM (egress proxy rejects Chromium CONNECT tunnels; launch + local render + read + screenshot + element actions proven live; `goto` needs the laptop).
+- `setup-app.ps1` on Windows and the full (non-dry-run) `setup-app.sh` path (dry-run tested only).
 - Groq fallback (no key), Oracle cloud 7-day uptime (Phase 6, after Phase 5), OpenClaw agent turn with Gemini brain (needs his key on the laptop), OpenCode/goose coding job with qwen3:8b/Gemini (needs the laptop model).

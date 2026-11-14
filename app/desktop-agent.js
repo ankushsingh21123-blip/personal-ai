@@ -75,7 +75,7 @@ public static class Mouse {
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
-  public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, WHEEL = 0x0800;
+  public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, RIGHTDOWN = 0x0008, RIGHTUP = 0x0010, WHEEL = 0x0800;
 }
 '@;
 `;
@@ -105,14 +105,25 @@ async function getScreenSize() {
   return { width: w, height: h };
 }
 
-async function doScreenshot() {
+async function doScreenshot(regionPx) {
+  // regionPx: optional {x, y, width, height} in pixels — the `zoom` action
+  // captures only that region at full resolution (small/dense text).
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ankush-ai-shot-'));
   const tmp = path.join(dir, 'shot.png');
   try {
-    const ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;` +
-      `$b=[System.Drawing.Bitmap]::new([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height);` +
-      `$g=[System.Drawing.Graphics]::FromImage($b);$g.CopyFromScreen(0,0,0,0,$b.Size);$b.Save($args[0]);`;
-    await runPs(ps, [tmp]);
+    let ps;
+    if (regionPx) {
+      const { x, y, width, height } = regionPx;
+      ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;` +
+        `$b=[System.Drawing.Bitmap]::new([int]$args[2],[int]$args[3]);` +
+        `$g=[System.Drawing.Graphics]::FromImage($b);$g.CopyFromScreen([int]$args[0],[int]$args[1],0,0,$b.Size);$b.Save($args[4]);`;
+      await runPs(ps, [String(x), String(y), String(width), String(height), tmp]);
+    } else {
+      ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;` +
+        `$b=[System.Drawing.Bitmap]::new([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height);` +
+        `$g=[System.Drawing.Graphics]::FromImage($b);$g.CopyFromScreen(0,0,0,0,$b.Size);$b.Save($args[0]);`;
+      await runPs(ps, [tmp]);
+    }
     return fs.readFileSync(tmp);
   } finally {
     try { fs.unlinkSync(tmp); } catch {}
@@ -128,6 +139,58 @@ async function doClick(xNorm, yNorm) {
   await runPs(ADD_TYPE_MOUSE + `[Mouse]::SetCursorPos([int]$args[0], [int]$args[1]); [Mouse]::mouse_event([Mouse]::LEFTDOWN, 0, 0, 0, 0); Start-Sleep -Milliseconds 60; [Mouse]::mouse_event([Mouse]::LEFTUP, 0, 0, 0, 0);`,
     [String(x), String(y)]);
   return { ok: true, x, y };
+}
+
+async function doDoubleClick(xNorm, yNorm) {
+  await refuseIfAdminPrompt();
+  const { width, height } = await getScreenSize();
+  const x = Math.round(xNorm * width);
+  const y = Math.round(yNorm * height);
+  await runPs(ADD_TYPE_MOUSE + `[Mouse]::SetCursorPos([int]$args[0], [int]$args[1]); 1..2 | ForEach-Object { [Mouse]::mouse_event([Mouse]::LEFTDOWN, 0, 0, 0, 0); Start-Sleep -Milliseconds 50; [Mouse]::mouse_event([Mouse]::LEFTUP, 0, 0, 0, 0); Start-Sleep -Milliseconds 60; }`,
+    [String(x), String(y)]);
+  return { ok: true, x, y };
+}
+
+async function doRightClick(xNorm, yNorm) {
+  await refuseIfAdminPrompt();
+  const { width, height } = await getScreenSize();
+  const x = Math.round(xNorm * width);
+  const y = Math.round(yNorm * height);
+  await runPs(ADD_TYPE_MOUSE + `[Mouse]::SetCursorPos([int]$args[0], [int]$args[1]); [Mouse]::mouse_event([Mouse]::RIGHTDOWN, 0, 0, 0, 0); Start-Sleep -Milliseconds 60; [Mouse]::mouse_event([Mouse]::RIGHTUP, 0, 0, 0, 0);`,
+    [String(x), String(y)]);
+  return { ok: true, x, y };
+}
+
+async function doMove(xNorm, yNorm) {
+  await refuseIfAdminPrompt();
+  const { width, height } = await getScreenSize();
+  const x = Math.round(xNorm * width);
+  const y = Math.round(yNorm * height);
+  await runPs(ADD_TYPE_MOUSE + `[Mouse]::SetCursorPos([int]$args[0], [int]$args[1]);`, [String(x), String(y)]);
+  return { ok: true, x, y };
+}
+
+async function doDrag(xNorm, yNorm, x2Norm, y2Norm) {
+  await refuseIfAdminPrompt();
+  const { width, height } = await getScreenSize();
+  const x1 = Math.round(xNorm * width);
+  const y1 = Math.round(yNorm * height);
+  const x2 = Math.round(x2Norm * width);
+  const y2 = Math.round(y2Norm * height);
+  await runPs(ADD_TYPE_MOUSE + `[Mouse]::SetCursorPos([int]$args[0], [int]$args[1]); [Mouse]::mouse_event([Mouse]::LEFTDOWN, 0, 0, 0, 0); Start-Sleep -Milliseconds 120; [Mouse]::SetCursorPos([int]$args[2], [int]$args[3]); Start-Sleep -Milliseconds 120; [Mouse]::mouse_event([Mouse]::LEFTUP, 0, 0, 0, 0);`,
+    [String(x1), String(y1), String(x2), String(y2)]);
+  return { ok: true, x1, y1, x2, y2 };
+}
+
+async function doZoom(region) {
+  await refuseIfAdminPrompt();
+  const { width, height } = await getScreenSize();
+  const x = Math.max(0, Math.round(region[0] * width));
+  const y = Math.max(0, Math.round(region[1] * height));
+  const w = Math.min(width - x, Math.max(1, Math.round((region[2] - region[0]) * width)));
+  const h = Math.min(height - y, Math.max(1, Math.round((region[3] - region[1]) * height)));
+  const buf = await doScreenshot({ x, y, width: w, height: h });
+  return { ok: true, imageBase64: buf.toString('base64'), mimeType: 'image/png', region: { x, y, width: w, height: h } };
 }
 
 async function doType(textB64) {
@@ -179,7 +242,7 @@ async function doKey(keyName) {
 }
 
 // --- On-screen indicator ------------------------------------------------------
-// A small always-on-top window ("Personal AI is controlling the desktop")
+// A small always-on-top window ("Piplet is controlling the desktop")
 // with a Freeze button. Best-effort: if it fails to spawn, the agent logs
 // and continues — freeze is still available via the web UI and Telegram.
 // The button calls the app server's /api/freeze with the token.
@@ -188,8 +251,8 @@ function showIndicator() {
   if (indicatorProc) return;
   const appPort = process.env.PORT || 3100;
   const ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;` +
-    `$f=New-Object System.Windows.Forms.Form; $f.Text='Personal AI'; $f.TopMost=$true; $f.Width=340; $f.Height=90; $f.StartPosition='Manual'; $f.Location=New-Object System.Drawing.Point(20,20);` +
-    `$l=New-Object System.Windows.Forms.Label; $l.Text='Personal AI is controlling the desktop'; $l.Width=300; $l.Top=10; $l.Left=10; $f.Controls.Add($l);` +
+    `$f=New-Object System.Windows.Forms.Form; $f.Text='Piplet'; $f.TopMost=$true; $f.Width=340; $f.Height=90; $f.StartPosition='Manual'; $f.Location=New-Object System.Drawing.Point(20,20);` +
+    `$l=New-Object System.Windows.Forms.Label; $l.Text='Piplet is controlling the desktop'; $l.Width=300; $l.Top=10; $l.Left=10; $f.Controls.Add($l);` +
     `$b=New-Object System.Windows.Forms.Button; $b.Text='Freeze'; $b.Top=40; $b.Left=10; $b.Width=100;` +
     `$b.Add_Click({ try { Invoke-RestMethod -Uri 'http://127.0.0.1:${appPort}/api/freeze' -Method Post -Headers @{'X-Anku-Token'='${TOKEN}'; 'Content-Type'='application/json'} -Body '{"frozen":true,"reason":"indicator button"}' -TimeoutSec 5 | Out-Null } catch {} });` +
     `$f.Controls.Add($b); [void]$f.ShowDialog();`;
@@ -242,6 +305,11 @@ const server = http.createServer(async (req, res) => {
       showIndicator();
       let out;
       if (action.action === 'click') out = await doClick(action.x, action.y);
+      else if (action.action === 'double_click') out = await doDoubleClick(action.x, action.y);
+      else if (action.action === 'right_click') out = await doRightClick(action.x, action.y);
+      else if (action.action === 'move') out = await doMove(action.x, action.y);
+      else if (action.action === 'drag') out = await doDrag(action.x, action.y, action.x2, action.y2);
+      else if (action.action === 'zoom') out = await doZoom(action.region);
       else if (action.action === 'type') out = await doType(Buffer.from(action.text, 'utf8').toString('base64'));
       else if (action.action === 'scroll') out = await doScroll(action.amount);
       else if (action.action === 'key') out = await doKey(action.key);

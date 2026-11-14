@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Pre-push secret scan — runs before every `git push` when hooks are enabled:
+#   git config core.hooksPath .githooks
+# Blocks the push if any key-shaped pattern appears in the outgoing diff or
+# in a private file that would be pushed. Values are never printed.
+# To bypass in a genuine emergency (never for a real secret):
+#   git push --no-verify
+set -u
+SECRET_RE='AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-or-v1-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|[0-9]{6,}:[A-Za-z0-9_-]{30,}|ANKU_TOKEN=[0-9a-f]{10,}'
+FAIL=0
+# Scan the diff of every ref being pushed (added lines only).
+while read -r local_ref local_sha remote_ref remote_sha; do
+  range="$remote_sha"
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    range="$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  if git diff "$range" 2>/dev/null | grep -E '^\+[^+]' | grep -qE "$SECRET_RE"; then
+    echo "pre-push BLOCKED: possible secret in the outgoing diff for $local_ref — remove it before pushing (values not shown)"
+    FAIL=1
+  fi
+  if git diff --name-only "$range" 2>/dev/null | grep -qE '\.db(-shm|-wal)?$|wa-auth|data/shots/|\.env\.local$|\.env$'; then
+    echo "pre-push BLOCKED: private file in the outgoing diff for $local_ref (.db / wa-auth / shots / .env) — remove it from the commit"
+    FAIL=1
+  fi
+done
+# Also run the full security suite — a push must never go out with a failing check.
+if [ -f app/scripts/security-check.sh ]; then
+  if ! bash app/scripts/security-check.sh >/tmp/personal-ai-prepush.log 2>&1; then
+    echo "pre-push BLOCKED: app/scripts/security-check.sh failed — see /tmp/personal-ai-prepush.log"
+    FAIL=1
+  fi
+fi
+exit $FAIL

@@ -10,6 +10,9 @@ if [ -f .env.local ]; then
 fi
 export ANKU_TOKEN="${ANKU_TOKEN:-}"
 export PORT
+# The suite makes >60 API calls/minute against this one test server; raise
+# the loopback rate limit for the test run only (production default is 60).
+export RATE_LIMIT_PER_MIN=300
 # Start server in background
 node server.js > /tmp/ankush-ai-test-server.log 2>&1 &
 SERVER_PID=$!
@@ -26,5 +29,5 @@ if [ -z "${ANKU_TOKEN:-}" ] && [ -f .env.local ]; then
   ANKU_TOKEN="$(grep -E '^ANKU_TOKEN=' .env.local | cut -d= -f2)"
   export ANKU_TOKEN
 fi
-node --test tests/test.js tests/providers.test.js tests/phases.test.js
+node --test tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js
 echo "TESTS DONE — server log: /tmp/ankush-ai-test-server.log"

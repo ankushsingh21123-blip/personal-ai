@@ -20,6 +20,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { looksLikeSecret } = require('./secrets');
+const { KEY_REFUSAL } = require('./telegram');
 
 const AUTH_DIR = path.join(__dirname, 'data', 'wa-auth');
 
@@ -42,6 +44,21 @@ function status() {
     problems: g.problems,
     warning: 'WhatsApp automation carries ban risk. Spare number only, never the primary. The user scans the QR themselves.',
   };
+}
+
+// Handle one incoming message. Extracted (and exported) so the key-refusal
+// rule is unit-testable without the Baileys package installed.
+// `send(text)` delivers the reply; `onMessage` runs the agent turn.
+// A key-shaped message is refused before onMessage ever sees it.
+async function handleIncomingMessage({ text, from, onMessage, send }) {
+  if (!text || !onMessage) return { handled: false };
+  if (looksLikeSecret(text)) {
+    await send(KEY_REFUSAL);
+    return { handled: true, refused: true };
+  }
+  const reply = await onMessage({ text, from });
+  if (reply) await send(String(reply).slice(0, 4000));
+  return { handled: true };
 }
 
 // Start the WhatsApp socket. Throws unless every guard passes. `onMessage`
@@ -78,12 +95,14 @@ async function startWhatsApp({ onMessage, sockFactory, logger } = {}) {
       const text = m.message?.conversation || m.message?.extendedTextMessage?.text || '';
       if (!text || !onMessage) continue;
       try {
-        const reply = await onMessage({ text, from: m.key.remoteJid });
-        if (reply) await sock.sendMessage(m.key.remoteJid, { text: String(reply).slice(0, 4000) });
+        await handleIncomingMessage({
+          text, from: m.key.remoteJid, onMessage,
+          send: (t) => sock.sendMessage(m.key.remoteJid, { text: String(t).slice(0, 4000) }),
+        });
       } catch (e) { log(`whatsapp message handling failed: ${String(e.message).slice(0, 200)}`); }
     }
   });
   return sock;
 }
 
-module.exports = { guards, status, startWhatsApp, AUTH_DIR };
+module.exports = { guards, status, startWhatsApp, handleIncomingMessage, AUTH_DIR };

@@ -1,4 +1,4 @@
-# Personal AI — laptop setup guide (Phase 0–2)
+# Piplet (Personal AI) — laptop setup guide (Phase 0–2)
 
 **Owner:** Ankush Singh · **Cost:** $0 — no paid signups, no spending, no Connects.
 **Stack:** OpenClaw (gateway) + goose (coding agent) · Brain order: Gemini free → Groq free → Ollama local (qwen3:8b). Any API key works — OpenAI and Anthropic are optional extras via `.env.local` (see "Any API key" below); the $0 chain needs no paid key.
@@ -243,6 +243,30 @@ proven live until you run it below.
   daily `HH:MM` + weekdays, or an interval in minutes (≥5). Dry-run first
   (`POST /api/routines/:id/run {"dry_run":true}`). A routine can never
   send, post, spend or delete — those become pending approvals.
+
+## Product expansion — one-command setup, Settings, doctor (built 14 Nov 2026)
+
+### One-command setup
+From the repo root, instead of the manual steps above:
+- Linux/macOS/WSL: `bash setup-app.sh` (add `--dry-run` to see the plan first; `--with-ollama-model` to also pull `qwen3:8b` — off by default).
+- Windows PowerShell: `.\setup-app.ps1` (add `-DryRun` to see the plan first).
+Both scripts check Node/npm, install app deps, install the Chromium browser binary, create `.env.local` if missing (never overwrite), and run the doctor. They never create accounts, never download a model by default, and never touch your keys. The Windows script has NOT been run on a real laptop yet — report any error it prints.
+
+### Doctor — verify the install
+`npm run doctor` (in `app/`) checks Node version, deps, the Chromium binary, whether a brain is available (a key present OR Ollama reachable — values are never shown), `.env.local` permissions, the database, ports, and optional pieces (ADB, desktop agent). Exit 1 if anything required fails.
+
+### Settings — API keys, provider order, channels (web UI)
+Open the web UI → **Settings**. Add/edit/remove a key per provider (Gemini, Groq, OpenAI, Anthropic, or a CUSTOM OpenAI-compatible endpoint: base URL + model + key), set the provider order, toggle fast routing, and set the Telegram/sync values. Changes apply immediately (no restart) and are written to `.env.local` (mode 600, git-ignored) by a validated writer. The **Test** button on each provider makes one real call and records the result; masked previews only (last 4 characters). Keys are never logged, never synced to the cloud node, and never committed — a pre-push hook scans for them before every push.
+- **Never paste a key in chat** (web chat, Telegram, or WhatsApp). Telegram and WhatsApp REFUSE key-shaped messages and point you to Settings; chat history must never hold a key. Use `/providers` on Telegram to see status only.
+- Where to get keys: see `docs/API-KEYS.md` — free sources verified 14 Nov 2026 (Gemini AI Studio, Groq, OpenRouter free models, Hugging Face, Ollama local = no key), plus the paid providers represented honestly and the custom-endpoint path.
+
+### Replay log, notifications, sync status (web UI)
+- **Replay:** every screen loop records a session — each step's screenshot + action + result + latency. Open a session to view its shots and re-run it with VERIFIED replay: the agent re-checks the screen before each step and stops at the first mismatch; destructive steps need a fresh approval. Delete a session to delete its screenshots too.
+- **Notifications:** the agent can create local notifications (`notify` tool); read them in the Notifications panel.
+- **Sync:** the Sync panel shows the peer URL (masked), last push/pull times, and conflict count.
+
+### Customise by talking to the agent
+Ask the agent (in chat) to change the app's behaviour — e.g. "add a notes search tool" or "make routines accept 'every Friday'". It edits repo code, runs the full test suite (`run_tests`), and reports what changed. It can never commit or push (git is read-only for it); you review the diff and commit. Safety gates (auth, allowlists, refusal rules) cannot be changed this way — see `docs/CUSTOMIZE.md`.
 
 ## Phase 5–6 — cloud (only after Phase 4 passes)
 

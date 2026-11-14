@@ -59,6 +59,30 @@ function adbArgv(action) {
       // adb input text: spaces become %s. No shell involved — argv only.
       return ['shell', 'input', 'text', action.text.replace(/ /g, '%s')];
     }
+    case 'long_press': {
+      // Long press = swipe with zero distance and a long duration.
+      if (!Number.isInteger(action.x) || !Number.isInteger(action.y) || action.x < 0 || action.y < 0) throw new Error('long_press needs integer pixel x and y >= 0');
+      const ms = action.ms === undefined ? 800 : action.ms;
+      if (!Number.isInteger(ms) || ms < 100 || ms > 5000) throw new Error('long_press ms must be an integer 100..5000');
+      return ['shell', 'input', 'swipe', String(action.x), String(action.y), String(action.x), String(action.y), String(ms)];
+    }
+    case 'open_app': {
+      // Launch by package name via monkey (the standard ADB app-launch).
+      // Package names are validated strictly — no shell, no intents.
+      if (typeof action.package !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(action.package) || action.package.length > 200) {
+        throw new Error('open_app needs a valid Android package name (e.g. com.example.app)');
+      }
+      return ['shell', 'monkey', '-p', action.package, '-c', 'android.intent.category.LAUNCHER', '1'];
+    }
+    case 'list_apps': {
+      return ['shell', 'pm', 'list', 'packages'];
+    }
+    case 'dump': {
+      // uiautomator XML dump of the current screen (element bounds) — the
+      // element-first phone path: tap by element bounds instead of guessing
+      // coordinates. Output is XML text; the caller parses bounds.
+      return ['shell', 'uiautomator', 'dump', '/dev/tty'];
+    }
     default: throw new Error(`unknown phone action: ${String(action.action)}`);
   }
 }
