@@ -71,9 +71,12 @@ Verify an install any time with `npm run doctor` in `app/`.
 - [`app/tests/TEST-REPORT.md`](app/tests/TEST-REPORT.md) — test evidence,
   model names, timings, and the live-vs-mocked boundary.
 
-## Status (14 Nov 2026)
+## Status (15 Nov 2026, re-verified 16 Nov 2026)
 
-113/113 tests pass; 35 security checks pass (npm audit skipped on the VM —
+131/131 tests pass (22 live-server Phase A + 30 mocked provider unit +
+37 Phases B–E + 42 product-expansion), including Phase A2 native function
+calling for OpenAI + Anthropic (unit-tested only, mocked fetch — no live
+keys on the build VM); 35 security checks pass (npm audit skipped on the VM —
 endpoint unreachable, re-run on the laptop). The live paths for vision,
 desktop-agent execution, ADB control, Telegram/WhatsApp, two-node sync,
 and external browser navigation are **unproven** until they run on the
