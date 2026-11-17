@@ -9,92 +9,98 @@
 <body>
 <header>
   <h1><img src="logo.svg" alt="Piplet logo" id="logo"> Piplet <small>Ankush's Personal AI</small></h1>
-  <p>Full working, $0 — frontend + backend + database + server, wired up. Brain: Gemini free → Groq free → Ollama local.</p>
-  <div id="status">Loading status…</div>
-  <p><button id="freeze-btn">Freeze agent</button> <span id="freeze-state"></span></p>
+  <p data-i18n="tagline">Full working, $0 — frontend + backend + database + server, wired up. Brain: Gemini free → Groq free → Ollama local.</p>
+  <p><label><span data-i18n="language_label">Language</span> <select id="lang-select" aria-label="Language">
+    <option value="en">English</option>
+    <option value="hi">हिन्दी</option>
+    <option value="te">తెలుగు</option>
+  </select></label> <small data-i18n="lang_note">Model replies and saved content stay in their original language.</small></p>
+  <div id="status" data-i18n="status_loading">Loading status…</div>
+  <p><button id="freeze-btn" data-i18n="freeze">Freeze agent</button> <span id="freeze-state"></span></p>
 </header>
 <main>
-  <section id="settings-box">
-    <h2>Settings — API keys &amp; providers</h2>
-    <p class="hint">Keys are stored only in <code>.env.local</code> on this machine (mode 600, never synced, never logged). Full keys are never shown back — only the last 4 characters. Where to get free keys: see <code>docs/API-KEYS.md</code> in the repo. Never paste a key in chat, Telegram, or WhatsApp — this page is the only place keys are entered.</p>
-    <div id="settings"></div>
-    <h3>Provider order</h3>
-    <p class="hint">First provider that answers wins. Unknown names are ignored; providers with no key are skipped.</p>
-    <form id="order-form">
-      <input id="order-input" maxlength="200" placeholder="gemini,groq,ollama">
-      <button type="submit">Save order</button>
+  <section id="chat-box">
+    <h2 data-i18n="chat_title">Chat — perceive → reason → act</h2>
+    <div id="messages" aria-live="polite"></div>
+    <form id="chat-form">
+      <input id="chat-input" maxlength="4000" data-i18n-ph="chat_placeholder" placeholder="Ask me to list files, read AGENT.md, write a note, run ‘date’… — I never send, post or spend without a draft first." autocomplete="off" aria-label="Chat message" autofocus>
+      <button type="submit" data-i18n="send">Send</button>
     </form>
-    <h3>Fast routing</h3>
-    <label><input type="checkbox" id="fast-routing"> Fast routing (routine text steps try the local model first; hard work always uses the full chain — off by default)</label>
-    <h3>Channels &amp; sync</h3>
+    <p class="hint" data-i18n="chat_hint">Never paste API keys in chat — use Settings above. Your token is in <code>.env.local</code> (git-ignored). This page is served from 127.0.0.1 only — it never leaves your machine.</p>
+  </section>
+  <section id="settings-box">
+    <h2 data-i18n="settings_title">Settings — API keys &amp; providers</h2>
+    <p class="hint" data-i18n="settings_hint">Keys are stored only in <code>.env.local</code> on this machine (mode 600, never synced, never logged). Full keys are never shown back — only the last 4 characters. Where to get free keys: see <code>docs/API-KEYS.md</code> in the repo. Never paste a key in chat, Telegram, or WhatsApp — this page is the only place keys are entered.</p>
+    <div id="settings"></div>
+    <h3 data-i18n="provider_order_title">Provider order</h3>
+    <p class="hint" data-i18n="provider_order_hint">First provider that answers wins. Unknown names are ignored; providers with no key are skipped.</p>
+    <form id="order-form">
+      <input id="order-input" maxlength="200" placeholder="gemini,groq,ollama" aria-label="Provider order">
+      <button type="submit" data-i18n="save_order">Save order</button>
+    </form>
+    <h3 data-i18n="fast_routing_title">Fast routing</h3>
+    <label><input type="checkbox" id="fast-routing"> <span data-i18n="fast_routing_label">Fast routing (routine text steps try the local model first; hard work always uses the full chain — off by default)</span></label>
+    <h3 data-i18n="channels_title">Channels &amp; sync</h3>
     <div id="channels"></div>
   </section>
-  <section id="chat-box">
-    <h2>Chat — perceive → reason → act</h2>
-    <div id="messages"></div>
-    <form id="chat-form">
-      <input id="chat-input" maxlength="4000" placeholder="Ask me to list files, read AGENT.md, write a note, run 'date'… — I never send, post or spend without a draft first." autocomplete="off">
-      <button type="submit">Send</button>
-    </form>
-    <p class="hint">Never paste API keys in chat — use Settings above. Your token is in <code>.env.local</code> (git-ignored). This page is served from 127.0.0.1 only — it never leaves your machine.</p>
-  </section>
   <section>
-    <h2>Notifications — things to look at when you are back</h2>
-    <button id="refresh-notifications">Refresh notifications</button>
+    <h2 data-i18n="notifications_title">Notifications — things to look at when you are back</h2>
+    <button id="refresh-notifications" data-i18n="notifications_refresh">Refresh notifications</button>
     <ul id="notifications"></ul>
   </section>
   <section>
-    <h2>Sync — this device &amp; the cloud node</h2>
-    <button id="refresh-sync">Refresh sync</button>
+    <h2 data-i18n="sync_title">Sync — this device &amp; the cloud node</h2>
+    <button id="refresh-sync" data-i18n="sync_refresh">Refresh sync</button>
     <div id="sync-status"></div>
   </section>
   <section>
-    <h2>Replay — screen sessions, audited step by step</h2>
-    <p class="hint">Screenshots stay on this device (data/shots/, never synced). Replay is verified: it stops at the first screen that does not match the recording, and destructive steps need fresh approval.</p>
-    <button id="refresh-replay">Refresh sessions</button>
+    <h2 data-i18n="replay_title">Replay — screen sessions, audited step by step</h2>
+    <p class="hint" data-i18n="replay_hint">Screenshots stay on this device (data/shots/, never synced). Replay is verified: it stops at the first screen that does not match the recording, and destructive steps need fresh approval.</p>
+    <button id="refresh-replay" data-i18n="replay_refresh">Refresh sessions</button>
     <ul id="replay"></ul>
     <div id="replay-detail"></div>
   </section>
   <section>
-    <h2>Jobs (from the database)</h2>
-    <button id="refresh-jobs">Refresh jobs</button>
+    <h2 data-i18n="jobs_title">Jobs (from the database)</h2>
+    <button id="refresh-jobs" data-i18n="jobs_refresh">Refresh jobs</button>
     <ul id="jobs"></ul>
   </section>
   <section>
-    <h2>Approvals — draft first, nothing irreversible executes</h2>
+    <h2 data-i18n="approvals_title">Approvals — draft first, nothing irreversible executes</h2>
     <form id="approval-form">
-      <input id="ap-action" placeholder="Action, e.g. send email" maxlength="200">
-      <input id="ap-details" placeholder="Exact draft / details" maxlength="5000">
-      <button type="submit">Create draft approval</button>
+      <input id="ap-action" data-i18n-ph="approvals_action_ph" placeholder="Action, e.g. send email" maxlength="200" aria-label="Approval action">
+      <input id="ap-details" data-i18n-ph="approvals_details_ph" placeholder="Exact draft / details" maxlength="5000" aria-label="Approval details">
+      <button type="submit" data-i18n="approvals_submit">Create draft approval</button>
     </form>
     <ul id="approvals"></ul>
   </section>
   <section>
-    <h2>Offline queue (outbox — work that waits for the network)</h2>
-    <button id="refresh-queue">Refresh queue</button>
-    <button id="drain-queue">Drain now</button>
+    <h2 data-i18n="queue_title">Offline queue (outbox — work that waits for the network)</h2>
+    <button id="refresh-queue" data-i18n="queue_refresh">Refresh queue</button>
+    <button id="drain-queue" data-i18n="queue_drain">Drain now</button>
     <ul id="queue"></ul>
   </section>
   <section>
-    <h2>Routines — scheduled jobs (draft-first, never send/post/spend/delete)</h2>
+    <h2 data-i18n="routines_title">Routines — scheduled jobs (draft-first, never send/post/spend/delete)</h2>
     <form id="routine-form">
-      <input id="routine-name" placeholder="Name, e.g. Morning internship check" maxlength="200">
-      <input id="routine-task" placeholder="Task, e.g. check Internshala for new matching roles and draft applications" maxlength="4000">
-      <input id="routine-time" placeholder="Daily time HH:MM, e.g. 09:00" maxlength="5">
-      <button type="submit">Create daily routine</button>
+      <input id="routine-name" data-i18n-ph="routines_name_ph" placeholder="Name, e.g. Morning internship check" maxlength="200" aria-label="Routine name">
+      <input id="routine-task" data-i18n-ph="routines_task_ph" placeholder="Task, e.g. check Internshala for new matching roles and draft applications" maxlength="4000" aria-label="Routine task">
+      <input id="routine-time" data-i18n-ph="routines_time_ph" placeholder="Daily time HH:MM, e.g. 09:00" maxlength="5" aria-label="Routine time">
+      <button type="submit" data-i18n="routines_submit">Create daily routine</button>
     </form>
     <ul id="routines"></ul>
   </section>
   <section>
-    <h2>Notes / memory</h2>
+    <h2 data-i18n="notes_title">Notes / memory</h2>
     <form id="note-form">
-      <input id="note-title" placeholder="Title" maxlength="200">
-      <input id="note-body" placeholder="Body" maxlength="5000">
-      <button type="submit">Save note</button>
+      <input id="note-title" data-i18n-ph="notes_title_ph" placeholder="Title" maxlength="200" aria-label="Note title">
+      <input id="note-body" data-i18n-ph="notes_body_ph" placeholder="Body" maxlength="5000" aria-label="Note body">
+      <button type="submit" data-i18n="notes_submit">Save note</button>
     </form>
     <ul id="notes"></ul>
   </section>
 </main>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

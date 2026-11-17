@@ -4,14 +4,15 @@ Full working, $0, full stack wired up — frontend + backend + database + server
 Scope: compete with ChatGPT and Muse (12 Nov 01:24 IST) — a public AI assistant product, not just a personal tool.
 Phases B–E (computer use, phone, offline queue + cloud sync, routines) built 14 Nov from `research/computer-use-phone-cloud-spec-2026-11-14.md` — real code, tested, with the live paths honestly marked UNPROVEN below.
 Product expansion built 14 Nov (same day): Settings/API keys end to end, 20 tools, replay log, fast routing, notifications, clipboard/window control, key refusal in chat channels, one-command setup + doctor, security hardening — see `SYSTEM-DESIGN.md`, `PRIVACY.md`, `docs/TOOLS.md`, `docs/CUSTOMIZE.md`, `docs/API-KEYS.md`.
+Improvement cycle 17 Nov 2026: 4 more tools (24 total: `create_approval`, `file_info`, `append_file`, `recent_activity`), redirect-safe `web_fetch` (every hop re-validated), multilingual UI (English/Hindi/Telugu, chrome only), chat-first layout with node-append rendering + pending indicator. 143/143 tests, 35 security checks — see `app/tests/TEST-REPORT.md`.
 
 ## What works on this VM (tested for real — see app/tests/TEST-REPORT.md)
 | Piece | Version / model | Status |
 |---|---|---|
-| App (frontend+backend+DB+server) | Node 24.22.1, Express 5.3.0, node:sqlite | ✅ 131/131 tests pass, 35.3 s (22 live Phase A + 30 provider unit + 37 Phases B–E + 42 product-expansion) |
+| App (frontend+backend+DB+server) | Node 24.22.1, Express 5.3.0, node:sqlite | ✅ 143/143 tests pass, ~30 s (22 live Phase A + 30 provider unit + 37 Phases B–E + 42 product-expansion + 12 improvement-cycle, 17 Nov) |
 | Multi-provider brain (Phase A) | Gemini, Groq, OpenAI/OpenAI-compatible, Anthropic, Ollama | ✅ Chain + fallback proven; OpenAI/Anthropic unit-tested-only (no live key on VM) |
 | Settings / API keys | `settings.js` + `/api/settings/*` + Settings UI | ✅ Write/remove/order/test round-trips proven live; masked previews only; keys in `.env.local` (600), never synced/logged; cloud-provider test calls unproven (no keys) |
-| Native function calling | Gemini `functionDeclarations` + OpenAI `tools` + Anthropic `tools` → deny-first tools, 2 rounds max, 5 calls/round | ✅ Wired: schemas derived from one declaration source (20 tools), malformed/undeclared calls dropped; `agentLoopMulti` tries native providers in chain order; live end-to-end needs his keys on the laptop (Phase A2, unit-tested-only) |
+| Native function calling | Gemini `functionDeclarations` + OpenAI `tools` + Anthropic `tools` → deny-first tools, 2 rounds max, 5 calls/round | ✅ Wired: schemas derived from one declaration source (24 tools), malformed/undeclared calls dropped; `agentLoopMulti` tries native providers in chain order; live end-to-end needs his keys on the laptop (Phase A2, unit-tested-only) |
 | Fast routing | Deterministic classifier, local-first for routine text only | ✅ Unit-tested + fallback proven; OFF by default; routing decision + latency recorded per turn |
 | Replay log | Sessions + PNG shots + verified replay | ✅ Record/retrieve/purge + verified-replay semantics proven (mocked + live HTTP); live screen replay needs the laptop |
 | Notifications | Local inbox, UI + API | ✅ Proven live (create/read/unread) |
@@ -51,7 +52,7 @@ Product expansion built 14 Nov (same day): Settings/API keys end to end, 20 tool
 - Android phone + authorised USB/wireless debugging, for live phone control
 
 ## Files
-- `app/` — the working system: README, SECURITY, server/brain/tools/db, vision/screen/desktop/phone/telegram/whatsapp/browser/queue/sync/routines/freeze, settings/secrets/notify/replay/route/clipboard/windows/doctor, desktop-agent.js, public frontend, tests (131/131), TEST-REPORT, security-check
+- `app/` — the working system: README, SECURITY, server/brain/tools/db, vision/screen/desktop/phone/telegram/whatsapp/browser/queue/sync/routines/freeze, settings/secrets/notify/replay/route/clipboard/windows/doctor, desktop-agent.js, public frontend (incl. `i18n.js`: English/Hindi/Telugu), tests (143/143), TEST-REPORT, security-check
 - `SYSTEM-DESIGN.md` — architecture, data flow, trust boundaries, failure modes; `PRIVACY.md` — plain-English privacy; `docs/` — API-KEYS, TOOLS, CUSTOMIZE
 - `setup-app.sh` / `setup-app.ps1` — one-command laptop setup (+ dry-run); `.githooks/pre-push` — secret scan before every push
 - `research/` — personal-ai-laptop-phone-cloud-2026-11-11.md, efficiency-2026-11-12.md, alternatives-2026-11-12.md, competitive-chatgpt-muse-2026-11-12.md, computer-use-phone-cloud-spec-2026-11-14.md (Phases B–E spec — BUILT 14 Nov, live paths marked; Phase A2 built 15 Nov), roadmap-responsible-autonomy-messaging-2026-11-15.md (design note: decision policies + audit + escalation, WhatsApp phased plan — NOT built/enabled)

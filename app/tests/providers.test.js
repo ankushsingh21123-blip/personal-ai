@@ -229,7 +229,7 @@ test('toJsonSchema: lowercases types recursively, preserves required/description
   assert.deepEqual(brain.toJsonSchema('nope'), { type: 'object', properties: {} });
 });
 
-test('openaiTools: 20 function tools derived from the declarations, lowercase schemas, no dangerous tool', () => {
+test('openaiTools: function tools derived from the declarations, lowercase schemas, no dangerous tool', () => {
   const tools = brain.openaiTools();
   assert.equal(tools.length, brain.TOOL_DECLARATIONS.length);
   assert.deepEqual(tools.map(t => t.function.name).sort(), brain.TOOL_DECLARATIONS.map(d => d.name).sort());
@@ -250,7 +250,7 @@ test('openaiTools: 20 function tools derived from the declarations, lowercase sc
   assert.equal(readFile.properties.path.type, 'string');
 });
 
-test('anthropicTools: 20 tools with input_schema, same names, lowercase schemas', () => {
+test('anthropicTools: tools with input_schema, same names, lowercase schemas', () => {
   const tools = brain.anthropicTools();
   assert.equal(tools.length, brain.TOOL_DECLARATIONS.length);
   assert.deepEqual(tools.map(t => t.name).sort(), brain.TOOL_DECLARATIONS.map(d => d.name).sort());
@@ -348,7 +348,7 @@ test('agentLoopMulti + openai: tool call round-trips with tool_call_id echo; exe
   assert.equal(r.evidence[0].ok, true);
   assert.equal(calls.length, 2);
   const body1 = JSON.parse(calls[0].opts.body);
-  assert.equal(body1.tools.length, 20);
+  assert.equal(body1.tools.length, brain.TOOL_DECLARATIONS.length);
   assert.equal(body1.tool_choice, 'auto');
   const body2 = JSON.parse(calls[1].opts.body);
   assert.equal(body2.messages[1].role, 'assistant');
@@ -398,7 +398,7 @@ test('agentLoopMulti + anthropic: tool_use round-trips with tool_result blocks; 
   assert.deepEqual(executed, [['list_files', { path: '.' }]]);
   assert.equal(calls.length, 2);
   const body1 = JSON.parse(calls[0].opts.body);
-  assert.equal(body1.tools.length, 20);
+  assert.equal(body1.tools.length, brain.TOOL_DECLARATIONS.length);
   assert.equal(body1.tools[0].input_schema.type, 'object');
   assert.equal(body1.max_tokens, 1024);
   const body2 = JSON.parse(calls[1].opts.body);
@@ -458,7 +458,7 @@ test('agentLoopMulti: Gemini direct answers first in chain order; later provider
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /gemini-3\.5-flash-lite/);
   const body = JSON.parse(calls[0].opts.body);
-  assert.equal(body.tools[0].functionDeclarations.length, 20);
+  assert.equal(body.tools[0].functionDeclarations.length, brain.TOOL_DECLARATIONS.length);
 });
 
 test('agentLoopMulti: falls back to the text chain when no native provider answers; executor never runs', async () => {

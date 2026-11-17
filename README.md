@@ -71,14 +71,18 @@ Verify an install any time with `npm run doctor` in `app/`.
 - [`app/tests/TEST-REPORT.md`](app/tests/TEST-REPORT.md) — test evidence,
   model names, timings, and the live-vs-mocked boundary.
 
-## Status (15 Nov 2026, re-verified 16 Nov 2026)
+## Status (17 Nov 2026)
 
-131/131 tests pass (22 live-server Phase A + 30 mocked provider unit +
-37 Phases B–E + 42 product-expansion), including Phase A2 native function
-calling for OpenAI + Anthropic (unit-tested only, mocked fetch — no live
-keys on the build VM); 35 security checks pass (npm audit skipped on the VM —
-endpoint unreachable, re-run on the laptop). The live paths for vision,
-desktop-agent execution, ADB control, Telegram/WhatsApp, two-node sync,
-and external browser navigation are **unproven** until they run on the
-laptop/phone/cloud — the test report says exactly what was observed and
-what was mocked. Nothing here claims otherwise.
+143/143 tests pass (22 live-server Phase A + 30 mocked provider unit +
+37 Phases B–E + 42 product-expansion + 12 improvement-cycle), including
+Phase A2 native function calling for OpenAI + Anthropic (unit-tested only,
+mocked fetch — no live keys on the build VM) and 24 deny-first tools;
+35 security checks pass (npm audit skipped on the VM — endpoint
+unreachable, re-run on the laptop). The 17 Nov cycle added 4 tools
+(`create_approval`, `file_info`, `append_file`, `recent_activity`),
+redirect-safe `web_fetch`, and a multilingual UI (English/Hindi/Telugu,
+UI chrome only). The live paths for vision, desktop-agent execution,
+ADB control, Telegram/WhatsApp, two-node sync, and external browser
+navigation are **unproven** until they run on the laptop/phone/cloud —
+the test report says exactly what was observed and what was mocked.
+Nothing here claims otherwise.

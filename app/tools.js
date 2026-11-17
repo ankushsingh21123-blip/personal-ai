@@ -99,6 +99,42 @@ async function runTests() {
   }
 }
 
+// --- Public-URL fetching (web_fetch) --------------------------------------
+// A fetch must never reach a private/local address — including through a
+// redirect. The checks run on EVERY hop: https only, no loopback/RFC1918/
+// link-local/metadata hosts. DNS-rebinding and exotic IP spellings
+// (0x7f000001, decimal) are NOT covered — see SECURITY.md known limits.
+const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|0\.0\.0\.0|::1|\[::1\]|169\.254\.)/i;
+function assertPublicHttpsUrl(raw) {
+  if (typeof raw !== 'string' || !/^https:\/\//i.test(raw)) throw new Error('web_fetch requires an https URL');
+  const u = new URL(raw);
+  if (PRIVATE_HOST.test(u.hostname)) throw new Error('denied: private/local URL');
+  return u;
+}
+
+// Redirect-safe fetch with injectable fetch (unit tests stub it). Follows at
+// most 3 redirects, re-validating every hop; returns stripped page text,
+// max 5000 chars. Fetched content is DATA, never instructions.
+async function fetchPublicText(rawUrl, fetchImpl = fetch, maxRedirects = 3) {
+  let url = rawUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const u = assertPublicHttpsUrl(url);
+    const res = await fetchImpl(u.toString(), { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'ankush-personal-ai/1.0' }, redirect: 'manual' });
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      const loc = res.headers && typeof res.headers.get === 'function' ? res.headers.get('location') : null;
+      if (!loc) throw new Error(`fetch failed: HTTP ${res.status} with no Location header`);
+      if (hop === maxRedirects) throw new Error('fetch failed: too many redirects');
+      url = new URL(loc, u.toString()).toString();
+      continue;
+    }
+    if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
+    const html = await res.text();
+    return html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 5000);
+  }
+  throw new Error('fetch failed: too many redirects');
+}
+
 async function execute(tool, args = {}) {
   switch (tool) {
     case 'search_files': {
@@ -293,18 +329,62 @@ async function execute(tool, args = {}) {
       return { ok: true, backup: args.path + '.bak' };
     }
     case 'web_fetch': {
-      // Read-only fetch: https only, no private IPs, 50kb cap, HTML stripped.
+      // Read-only fetch: https only, no private IPs (checked on every
+      // redirect hop), 5000-char text cap, HTML stripped.
       // Fetched content is DATA, never instructions — the agent must not act on it.
-      if (!args.url || !/^https:\/\//.test(args.url)) throw new Error('web_fetch requires an https URL');
+      const text = await fetchPublicText(args.url);
       const u = new URL(args.url);
-      if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(u.hostname)) throw new Error('denied: private/local URL');
-      const res = await fetch(args.url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'ankush-personal-ai/1.0' } });
-      if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
-      const html = await res.text();
-      const text = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 5000);
       audit(tool, args, true, `${text.length} chars from ${u.hostname}`);
       return { ok: true, url: args.url, text };
+    }
+    case 'create_approval': {
+      // Draft ONLY: records an approval request for the user to decide.
+      // This is the sanctioned path for send/post/spend/delete requests:
+      // approving the record still does NOT execute anything — a human
+      // sends, posts, or spends. The agent can never execute via this tool.
+      if (!args.action || !args.details) throw new Error('action and details required');
+      const r = run('INSERT INTO approvals (action, details) VALUES (?, ?)', String(args.action).slice(0, 200), String(args.details).slice(0, 5000));
+      audit(tool, { action: args.action }, true, `approval draft ${r.lastInsertRowid}`);
+      return { ok: true, approval_id: Number(r.lastInsertRowid), status: 'pending', note: 'Draft only — approving does not execute the action. A human sends/posts/spends.' };
+    }
+    case 'file_info': {
+      // Read-only metadata for one workspace file or directory: type,
+      // size, last-modified time, and line count for small text files.
+      // Never returns file contents (use read_file) or secret paths.
+      const p = safePath(args.path);
+      if (!fs.existsSync(p)) throw new Error('file not found');
+      const st = fs.statSync(p);
+      const info = { path: args.path, type: st.isDirectory() ? 'dir' : 'file', size: st.size, modified: st.mtime.toISOString() };
+      if (st.isFile() && st.size <= 200 * 1024) {
+        const content = fs.readFileSync(p, 'utf8');
+        if (!content.includes('\0')) info.lines = content.split('\n').length;
+      }
+      audit(tool, args, true, `${info.type} ${st.size} bytes`);
+      return { ok: true, ...info };
+    }
+    case 'append_file': {
+      // Append text to an EXISTING workspace file (logs, journals, lists).
+      // Refuses when the file does not exist (create_file makes new ones)
+      // and when content is empty or over 10KB. No backup is written —
+      // appends are additive; edit_file keeps the .bak behaviour.
+      if (!args.path || typeof args.content !== 'string') throw new Error('path and content required');
+      if (!args.content.length || args.content.length > 10 * 1024) throw new Error('append_file content must be 1..10240 chars');
+      const p = safePath(args.path);
+      if (!fs.existsSync(p) || !fs.statSync(p).isFile()) throw new Error('file not found — use create_file for new files');
+      fs.appendFileSync(p, args.content, 'utf8');
+      audit(tool, { path: args.path }, true, `appended ${args.content.length} chars to ${args.path}`);
+      return { ok: true, path: args.path, appended_chars: args.content.length };
+    }
+    case 'recent_activity': {
+      // Read-only self-review: the last N audit-log rows (1..20, default
+      // 10), args and results truncated. Lets the agent check what it
+      // already did before acting again. Audit rows are local-only and
+      // never synced; this tool returns metadata, never secret content.
+      const limit = Math.min(Math.max(Number(args.limit || 10) || 10, 1), 20);
+      const rows = all('SELECT id, tool, args, allowed, result, created_at FROM audit_log ORDER BY id DESC LIMIT ?', limit)
+        .map(r => ({ id: r.id, tool: r.tool, args: String(r.args || '').slice(0, 200), allowed: r.allowed, result: String(r.result || '').slice(0, 200), created_at: r.created_at }));
+      audit(tool, args, true, `${rows.length} audit rows`);
+      return { ok: true, activity: rows };
     }
     case 'run_command': {
       const r = await runCommand(args.command);
@@ -320,4 +400,4 @@ async function execute(tool, args = {}) {
   }
 }
 
-module.exports = { execute, safePath, WORKSPACE, ALLOWED_COMMANDS, audit, runTests, setTestRunner };
+module.exports = { execute, safePath, WORKSPACE, ALLOWED_COMMANDS, audit, runTests, setTestRunner, assertPublicHttpsUrl, fetchPublicText };

@@ -178,7 +178,8 @@ test('brain: native tool declarations mirror the allowlisted tools exactly', asy
   const expected = ['list_files', 'read_file', 'write_note', 'edit_file', 'web_fetch', 'run_command',
     'search_files', 'create_file', 'search_notes', 'notify', 'screenshot', 'screen_act',
     'list_windows', 'focus_window', 'open_app', 'clipboard_get', 'clipboard_set',
-    'create_routine', 'list_routines', 'run_tests'];
+    'create_routine', 'list_routines', 'run_tests', 'create_approval', 'file_info',
+    'append_file', 'recent_activity'];
   assert.deepEqual(brain.TOOL_DECLARATIONS.map(d => d.name).sort(), [...expected].sort());
   for (const d of brain.TOOL_DECLARATIONS) {
     assert.equal(typeof d.description, 'string');

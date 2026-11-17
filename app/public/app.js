@@ -6,6 +6,24 @@ if (!token) {
   token = prompt('Piplet token (from .env.local in the app folder):') || '';
   sessionStorage.setItem('anku_token', token);
 }
+// Language: English / Hindi / Telugu, chosen in the header, remembered in
+// localStorage. Only UI chrome is translated; model replies and saved
+// content stay in their original language (see public/i18n.js).
+const I18N = window.PipletI18n || { STRINGS: { en: {} }, LANGS: [{ code: 'en' }], t: (k) => k };
+let lang = localStorage.getItem('piplet_lang') || 'en';
+if (!I18N.STRINGS[lang]) lang = 'en';
+const t = (key) => I18N.t(key, lang);
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  const sel = document.getElementById('lang-select');
+  if (sel) sel.value = lang;
+}
+function loadAll() {
+  loadStatus(); loadJobs(); loadApprovals(); loadNotes(); loadFreeze();
+  loadQueue(); loadRoutines(); loadSettings(); loadNotifications(); loadSync(); loadReplay();
+}
 const H = { 'Content-Type': 'application/json', 'X-Anku-Token': token };
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { ...H, ...(opts.headers || {}) } });
@@ -18,11 +36,11 @@ async function loadStatus() {
   try {
     const s = await api('/api/status');
     document.getElementById('status').innerHTML =
-      `Brain order: ${esc(s.brain_order.join(' → '))}<br>` +
+      `${esc(t('brain_order'))}: ${esc(s.brain_order.join(' → '))}<br>` +
       `Gemini direct: ${s.providers_configured.gemini_direct} · Gemini VM helper: ${s.providers_configured.gemini_vm_helper} · Groq: ${s.providers_configured.groq} · OpenAI: ${s.providers_configured.openai} · Anthropic: ${s.providers_configured.anthropic} · Ollama: ${esc(JSON.stringify(s.providers_configured.ollama_models))}<br>` +
       `OpenClaw gateway up: ${s.openclaw_gateway_up} · goose: ${esc(s.goose_version || 'not found')}<br>` +
-      `Fast routing: ${s.fast_routing ? 'ON' : 'off'} · Sync peer: ${s.sync.peer_configured ? 'configured' : 'not configured'} · last push ${esc(s.sync.last_push_sent || 'never')} · last pull ${esc(s.sync.last_pull || 'never')} · conflicts ${s.sync.conflicts}<br>` +
-      `DB — messages ${s.counts.messages} · jobs ${s.counts.jobs} · notes ${s.counts.notes} · approvals pending ${s.counts.approvals_pending} · notifications unread ${s.counts.notifications_unread} · replay sessions ${s.counts.replay_sessions}`;
+      `${esc(t('fast_routing_status'))}: ${s.fast_routing ? 'ON' : 'off'} · ${esc(t('sync_peer'))}: ${s.sync.peer_configured ? 'configured' : 'not configured'} · last push ${esc(s.sync.last_push_sent || 'never')} · last pull ${esc(s.sync.last_pull || 'never')} · conflicts ${s.sync.conflicts}<br>` +
+      `DB — ${esc(t('counts_messages'))} ${s.counts.messages} · ${esc(t('counts_jobs'))} ${s.counts.jobs} · ${esc(t('counts_notes'))} ${s.counts.notes} · ${esc(t('counts_approvals'))} ${s.counts.approvals_pending} · ${esc(t('counts_notifications'))} ${s.counts.notifications_unread} · ${esc(t('counts_replay'))} ${s.counts.replay_sessions}`;
   } catch (e) { document.getElementById('status').textContent = 'Status failed: ' + e.message + ' — is the token right?'; }
 }
 const KEY_VARS = { gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
@@ -35,7 +53,7 @@ async function loadSettings() {
     box.innerHTML = s.providers.map(p => {
       const test = p.lastTest ? (p.lastTest.ok ? `last test OK · ${esc(p.lastTest.model || '')} · ${p.lastTest.ms}ms · ${esc(p.lastTest.at || '')}` : `last test FAILED · ${esc(p.lastTest.error || '')}`) : 'never tested';
       let fields = '';
-      if (KEY_VARS[p.id]) fields += `<input type="password" data-key="${KEY_VARS[p.id]}" placeholder="Paste new key here (leave blank to keep current)" autocomplete="off" maxlength="500"> <button data-remove-key="${KEY_VARS[p.id]}">Remove key</button>`;
+      if (KEY_VARS[p.id]) fields += `<input type="password" data-key="${KEY_VARS[p.id]}" placeholder="Paste new key here (leave blank to keep current)" autocomplete="off" maxlength="500"> <button data-remove-key="${KEY_VARS[p.id]}">${esc(t('remove_key'))}</button>`;
       if (p.baseUrl !== undefined) fields += `<input data-field="OPENAI_BASE_URL" value="${esc(p.baseUrl)}" placeholder="Base URL — empty = api.openai.com, or any OpenAI-compatible endpoint" maxlength="500">`;
       if (p.model !== undefined) fields += `<input data-field="${p.id === 'openai' ? 'OPENAI_MODEL' : p.id === 'anthropic' ? 'ANTHROPIC_MODEL' : 'OLLAMA_MODEL'}" value="${esc(p.model)}" placeholder="Model" maxlength="200">`;
       if (p.maxTokens !== undefined) fields += `<input data-field="ANTHROPIC_MAX_TOKENS" value="${esc(p.maxTokens)}" placeholder="Max tokens" maxlength="10">`;
@@ -44,7 +62,7 @@ async function loadSettings() {
         `<small>${esc(p.note)}</small><br>` +
         `Status: ${p.configured ? `configured ${esc(p.masked || '')}` : 'missing'} · ${test}` +
         (p.keyUrl ? ` · <a href="${esc(p.keyUrl)}" target="_blank" rel="noopener">get a key</a>` : '') +
-        `<br>${fields} <button data-test-provider="${p.id}">Test connection</button> <span data-test-result="${p.id}"></span></div>`;
+        `<br>${fields} <button data-test-provider="${p.id}">${esc(t('test_connection'))}</button> <span data-test-result="${p.id}"></span></div>`;
     }).join('');
     document.getElementById('channels').innerHTML =
       `<p>Telegram — token ${s.channels.telegram.tokenConfigured ? `configured ${esc(s.channels.telegram.tokenMasked || '')}` : 'missing'} · chat id ${esc(s.channels.telegram.chatId || 'not set')}</p>` +
@@ -53,7 +71,7 @@ async function loadSettings() {
       `<p>Sync — peer ${esc(s.channels.sync.peerUrl || 'not set')} · token ${s.channels.sync.tokenConfigured ? `configured ${esc(s.channels.sync.tokenMasked || '')}` : 'missing'}</p>` +
       `<input data-field="SYNC_PEER_URL" value="${esc(s.channels.sync.peerUrl)}" placeholder="Sync peer URL (https, or http to Tailscale 100.x)" maxlength="500"> ` +
       `<input type="password" data-key="SYNC_TOKEN" placeholder="Sync token" autocomplete="off" maxlength="500"> ` +
-      `<button id="save-settings">Save all settings</button> <span id="settings-result"></span>`;
+      `<button id="save-settings">${esc(t('save_settings'))}</button> <span id="settings-result"></span>`;
     box.querySelectorAll('[data-test-provider]').forEach(b => b.addEventListener('click', async () => {
       const out = document.querySelector(`[data-test-result="${b.dataset.testProvider}"]`);
       out.textContent = 'testing…';
@@ -93,7 +111,7 @@ document.getElementById('fast-routing').addEventListener('change', async e => {
 async function loadNotifications() {
   const j = await api('/api/notifications');
   document.getElementById('notifications').innerHTML = j.notifications.map(x =>
-    `<li><b>${esc(x.title)}</b> — ${esc(x.body)} <small>(${esc(x.source || '')} · ${esc(x.created_at)}${x.read_at ? ' · read' : ''})</small> ${x.read_at ? '' : `<button data-notif-read="${x.id}">Mark read</button>`}</li>`).join('') || '<li>No notifications.</li>';
+    `<li><b>${esc(x.title)}</b> — ${esc(x.body)} <small>(${esc(x.source || '')} · ${esc(x.created_at)}${x.read_at ? ' · read' : ''})</small> ${x.read_at ? '' : `<button data-notif-read="${x.id}">${esc(t('mark_read'))}</button>`}</li>`).join('') || `<li>${esc(t('no_notifications'))}</li>`;
   document.querySelectorAll('[data-notif-read]').forEach(b => b.addEventListener('click', async () => {
     await api(`/api/notifications/${b.dataset.notifRead}/read`, { method: 'POST', body: '{}' });
     loadNotifications();
@@ -116,7 +134,7 @@ async function loadShot(stepId, imgEl) {
 async function loadReplay() {
   const j = await api('/api/replay');
   document.getElementById('replay').innerHTML = j.sessions.map(x =>
-    `<li>#${x.id} ${esc(x.task)} — ${esc(x.status)} · ${x.steps} steps · ${esc(x.created_at)} <button data-replay-view="${x.id}">View</button> <button data-replay-delete="${x.id}">Delete (purge screenshots)</button></li>`).join('') || '<li>No screen sessions recorded yet.</li>';
+    `<li>#${x.id} ${esc(x.task)} — ${esc(x.status)} · ${x.steps} steps · ${esc(x.created_at)} <button data-replay-view="${x.id}">${esc(t('view'))}</button> <button data-replay-delete="${x.id}">${esc(t('delete_session'))}</button></li>`).join('') || `<li>${esc(t('no_replay'))}</li>`;
   document.querySelectorAll('[data-replay-view]').forEach(b => b.addEventListener('click', async () => {
     const s = await api(`/api/replay/${b.dataset.replayView}`);
     const detail = document.getElementById('replay-detail');
@@ -147,30 +165,46 @@ document.getElementById('refresh-replay').addEventListener('click', loadReplay);
 async function loadJobs() {
   const j = await api('/api/jobs');
   document.getElementById('jobs').innerHTML = j.jobs.map(x =>
-    `<li>#${x.id} ${esc(x.task)} — ${esc(x.status)} · ${esc(x.model || '')} / ${esc(x.provider || '')} · ${esc(x.created_at)}</li>`).join('') || '<li>No jobs yet.</li>';
+    `<li>#${x.id} ${esc(x.task)} — ${esc(x.status)} · ${esc(x.model || '')} / ${esc(x.provider || '')} · ${esc(x.created_at)}</li>`).join('') || `<li>${esc(t('no_jobs'))}</li>`;
 }
 async function loadApprovals() {
   const j = await api('/api/approvals');
   document.getElementById('approvals').innerHTML = j.approvals.map(x =>
-    `<li>#${x.id} ${esc(x.action)} — ${esc(x.status)} · ${esc(x.details)}</li>`).join('') || '<li>No approvals yet.</li>';
+    `<li>#${x.id} ${esc(x.action)} — ${esc(x.status)} · ${esc(x.details)}</li>`).join('') || `<li>${esc(t('no_approvals'))}</li>`;
 }
 async function loadNotes() {
   const j = await api('/api/notes');
   document.getElementById('notes').innerHTML = j.notes.map(x =>
-    `<li><b>${esc(x.title)}</b> — ${esc(x.body)}</li>`).join('') || '<li>No notes yet.</li>';
+    `<li><b>${esc(x.title)}</b> — ${esc(x.body)}</li>`).join('') || `<li>${esc(t('no_notes'))}</li>`;
+}
+// Chat messages are appended as nodes (appendChild, not re-rendering the
+// whole history), so a long chat stays fast. A pending bubble
+// shows while the brain works, so the page never looks stuck.
+function addMsg(html) {
+  const box = document.getElementById('messages');
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const node = tmp.firstChild;
+  box.appendChild(node);
+  box.scrollTop = box.scrollHeight;
+  return node;
 }
 document.getElementById('chat-form').addEventListener('submit', async e => {
   e.preventDefault();
   const input = document.getElementById('chat-input');
   const text = input.value.trim(); if (!text) return;
   input.value = '';
-  const box = document.getElementById('messages');
-  box.innerHTML += `<div class="msg"><b>You:</b> ${esc(text)}</div>`;
+  addMsg(`<div class="msg"><b>${esc(t('you'))}:</b> ${esc(text)}</div>`);
+  const pending = addMsg(`<div class="msg pending"><b>AI:</b> ${esc(t('thinking'))}</div>`);
   try {
     const r = await api('/api/chat', { method: 'POST', body: JSON.stringify({ text }) });
-    box.innerHTML += `<div class="msg"><b>AI (${esc(r.model)} / ${esc(r.provider)}):</b> ${esc(r.reply)}<br><small>Actions: ${esc(JSON.stringify(r.actions))} · ${r.latencyMs ?? '?'}ms${r.route ? ` · route ${esc(r.route)}` : ''}</small></div>`;
-  } catch (err) { box.innerHTML += `<div class="msg"><b>Error:</b> ${esc(err.message)}</div>`; }
-  box.scrollTop = box.scrollHeight; loadJobs();
+    pending.remove();
+    addMsg(`<div class="msg"><b>AI (${esc(r.model)} / ${esc(r.provider)}):</b> ${esc(r.reply)}<br><small>Actions: ${esc(JSON.stringify(r.actions))} · ${r.latencyMs ?? '?'}ms${r.route ? ` · route ${esc(r.route)}` : ''}</small></div>`);
+  } catch (err) {
+    pending.remove();
+    addMsg(`<div class="msg"><b>${esc(t('error_label'))}:</b> ${esc(err.message)}</div>`);
+  }
+  loadJobs();
 });
 document.getElementById('refresh-jobs').addEventListener('click', loadJobs);
 document.getElementById('approval-form').addEventListener('submit', async e => {
@@ -185,8 +219,8 @@ document.getElementById('note-form').addEventListener('submit', async e => {
 });
 async function loadFreeze() {
   const f = await api('/api/freeze');
-  document.getElementById('freeze-state').textContent = f.frozen ? `FROZEN since ${esc(f.frozen_at || '')} (${esc(f.reason || '')})` : 'Running (not frozen)';
-  document.getElementById('freeze-btn').textContent = f.frozen ? 'Unfreeze agent' : 'Freeze agent';
+  document.getElementById('freeze-state').textContent = f.frozen ? `${t('frozen_state')} ${f.frozen_at || ''} (${f.reason || ''})` : t('running_state');
+  document.getElementById('freeze-btn').textContent = f.frozen ? t('unfreeze') : t('freeze');
 }
 async function loadQueue() {
   const q = await api('/api/queue');
@@ -197,7 +231,7 @@ async function loadQueue() {
 async function loadRoutines() {
   const r = await api('/api/routines');
   document.getElementById('routines').innerHTML = r.routines.map(x =>
-    `<li>#${x.id} <b>${esc(x.name)}</b> — ${esc(JSON.stringify(x.schedule))} · ${x.enabled ? 'enabled' : 'disabled'} · next run ${esc(x.next_run_at || '')} <button data-routine-run="${x.id}">Run now (dry)</button></li>`).join('') || '<li>No routines yet.</li>';
+    `<li>#${x.id} <b>${esc(x.name)}</b> — ${esc(JSON.stringify(x.schedule))} · ${x.enabled ? 'enabled' : 'disabled'} · next run ${esc(x.next_run_at || '')} <button data-routine-run="${x.id}">${esc(t('run_now_dry'))}</button></li>`).join('') || `<li>${esc(t('no_routines'))}</li>`;
   document.querySelectorAll('[data-routine-run]').forEach(b => b.addEventListener('click', async () => {
     await api(`/api/routines/${b.dataset.routineRun}/run`, { method: 'POST', body: JSON.stringify({ dry_run: true }) });
     loadRoutines();
@@ -216,4 +250,17 @@ document.getElementById('routine-form').addEventListener('submit', async e => {
   await api('/api/routines', { method: 'POST', body: JSON.stringify({ name: document.getElementById('routine-name').value, task: document.getElementById('routine-task').value, schedule: { type: 'daily', time } }) });
   loadRoutines();
 });
-loadStatus(); loadJobs(); loadApprovals(); loadNotes(); loadFreeze(); loadQueue(); loadRoutines(); loadSettings(); loadNotifications(); loadSync(); loadReplay();
+document.getElementById('lang-select').addEventListener('change', e => {
+  lang = I18N.STRINGS[e.target.value] ? e.target.value : 'en';
+  localStorage.setItem('piplet_lang', lang);
+  applyLang();
+  if (token) loadAll();
+});
+applyLang();
+if (!token) {
+  // No token (prompt cancelled): say so plainly instead of firing eleven
+  // calls that all 401. Refreshing the page asks for the token again.
+  document.getElementById('status').textContent = t('token_missing');
+} else {
+  loadAll();
+}

@@ -29,5 +29,5 @@ if [ -z "${ANKU_TOKEN:-}" ] && [ -f .env.local ]; then
   ANKU_TOKEN="$(grep -E '^ANKU_TOKEN=' .env.local | cut -d= -f2)"
   export ANKU_TOKEN
 fi
-node --test tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js
+node --test tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js
 echo "TESTS DONE — server log: /tmp/ankush-ai-test-server.log"

@@ -28,7 +28,7 @@ replay, fast routing, hardening).
 │              │ providers │ │ deny-    │ │ messages/jobs │      │
 │              │ chain +   │ │ first    │ │ notes/approv. │      │
 │              │ function  │ │ executor │ │ audit/outbox  │      │
-│              │ calling   │ │ 20 tools │ │ routines/sync │      │
+│              │ calling   │ │ 24 tools │ │ routines/sync │      │
 │              └─────┬─────┘ └────┬─────┘ │ notif./replay │      │
 │                    │            │       └───────────────┘      │
 │        ┌───────────▼────────────▼───────────┐                   │

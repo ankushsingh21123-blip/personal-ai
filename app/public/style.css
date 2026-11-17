@@ -2,8 +2,10 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0 aut
 header{border-bottom:2px solid #111;padding-bottom:12px}
 h1{margin:0;font-size:1.6em} h2{font-size:1.15em;margin-top:28px}
 section{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin:14px 0}
-#messages{max-height:320px;overflow:auto;border:1px solid #ddd;border-radius:6px;padding:10px;margin-bottom:10px;background:#f7f7f7}
+#messages{max-height:380px;overflow:auto;border:1px solid #ddd;border-radius:6px;padding:10px;margin-bottom:10px;background:#f7f7f7}
 .msg{margin:6px 0}.msg b{color:#444}
+.msg.pending{color:#666;font-style:italic}
+#lang-select{padding:6px;font-size:1em}
 input,button{padding:8px;font-size:1em} input{width:60%;margin-right:6px}
 #chat-input{width:72%}
 button{cursor:pointer;background:#111;color:#fff;border:0;border-radius:6px}

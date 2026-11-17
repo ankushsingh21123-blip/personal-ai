@@ -23,7 +23,7 @@ before it runs, and validation lives in code the model cannot change
 by asking. Screen and page content is untrusted data, never
 instructions.
 
-## 2. Chat tools (20) — `tools.js` + `brain.js` declarations
+## 2. Chat tools (24) — `tools.js` + `brain.js` declarations
 
 | Tool | What it does | Gate |
 |---|---|---|
@@ -34,7 +34,11 @@ instructions.
 | `create_file` | Create a NEW file (refuses if it exists) | Workspace-confined, 100KB cap |
 | `search_files` | Content search in the workspace | Skips node_modules/.git/data, 500 files / 20 matches |
 | `search_notes` | Search saved notes | — |
-| `web_fetch` | Fetch an https page, text only (5k chars) | Public URLs only, no private IPs |
+| `web_fetch` | Fetch an https page, text only (5k chars) | Public URLs only, no private IPs, every redirect hop re-validated (max 3) |
+| `create_approval` | Record a DRAFT approval request (action + exact details) | Draft only — approving never executes; a human sends/posts/spends |
+| `file_info` | Metadata for one file/dir: type, size, modified, line count | Read-only, no contents, secret paths denied |
+| `append_file` | Append 1..10KB to an EXISTING file | Workspace-confined; refuses new files (use `create_file`) |
+| `recent_activity` | Last 1..20 audit-log rows, newest first | Read-only, args/results truncated; local-only log |
 | `run_command` | One of 7 read-only commands | Exact argv, `execFile`, no shell |
 | `run_tests` | Run the full test suite on port 3199, return pass/fail | One run at a time; required before claiming a self-modification works |
 | `notify` | Leave a notification in the local inbox | Local only, never sent anywhere |
@@ -49,7 +53,9 @@ instructions.
 | `list_routines` | List routines + next runs | — |
 
 Anything else — send, post, spend, delete, publish, unknown — is
-denied and audit-logged, and becomes a pending approval at most.
+denied and audit-logged. The agent's sanctioned path for those requests
+is the `create_approval` tool, which records a draft for the user to
+decide; approving the draft still executes nothing.
 
 ## 3. Screen actions (11) — `desktop.js` / `vision.js` / `desktop-agent.js`
 
