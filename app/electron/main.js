@@ -63,6 +63,31 @@ let serverMod = null;
 let serverPort = 0;
 let quitting = false;
 let shuttingDown = false;
+let logPath = null;
+let logStream = null;
+let dataDirShown = null;
+
+// The installed app has no visible terminal, so server + shell output
+// is mirrored to <userData>/app.log (appended, never truncated) for
+// troubleshooting. stdout keeps working exactly as before.
+function setupLogFile(userDataDir) {
+  logPath = path.join(userDataDir, 'app.log');
+  dataDirShown = userDataDir;
+  try {
+    logStream = fs.createWriteStream(logPath, { flags: 'a' });
+    const origLog = console.log;
+    const origErr = console.error;
+    const write = (args) => {
+      try {
+        logStream.write(`[${new Date().toISOString()}] ${args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ')}\n`);
+      } catch { /* logging must never break the app */ }
+    };
+    console.log = (...args) => { origLog(...args); write(args); };
+    console.error = (...args) => { origErr(...args); write(args); };
+  } catch (e) {
+    console.error('[piplet] log file unavailable:', e.message);
+  }
+}
 
 function iconPath() {
   // electron-builder packs electron/ inside the asar; nativeImage can
@@ -124,6 +149,15 @@ function buildTrayMenu() {
         if (freeze) freeze.setFrozen(!frozen, frozen ? 'tray unfreeze' : 'tray freeze');
         if (tray) tray.setContextMenu(buildTrayMenu());
       },
+    },
+    { type: 'separator' },
+    {
+      label: 'Open app log',
+      click: () => { if (logPath) shell.showItemInFolder(logPath); },
+    },
+    {
+      label: 'Open data folder',
+      click: () => { if (dataDirShown) shell.openPath(dataDirShown); },
     },
     { type: 'separator' },
     {
@@ -250,6 +284,9 @@ async function shutdown() {
     const { db } = require('../db');
     if (db) db.close();
   } catch (e) { console.error('[piplet] db close failed:', e.message); }
+  try {
+    if (logStream) logStream.end();
+  } catch {}
 }
 
 app.on('second-instance', () => {
@@ -278,6 +315,8 @@ app.whenReady().then(async () => {
   const userDataDir = resolveUserDataDir({ electronUserData: app.getPath('userData') });
   const paths = appPaths(userDataDir);
   fs.mkdirSync(paths.dataDir, { recursive: true });
+  // Log file first: everything below (including the server) is recorded.
+  setupLogFile(userDataDir);
 
   // Skills working copy (copy-once, never overwrite approvals).
   const bundled = bundledSkillsDir({ resourcesPath: process.resourcesPath, electronDir: __dirname });

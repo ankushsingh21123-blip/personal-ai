@@ -354,6 +354,17 @@ instead of moving on. Nothing is pushed without parent review.
 | P5 — Audit UI + autonomy tiers | Verify/receipt UI panel + tiered autonomy + per-workflow kill switch | Nothing new | Cycle 2 audit log (shipped) |
 | P6 — PWA-ready web | Manifest, icons, service worker, offline shell, IndexedDB queue, HTTPS deployment decision | Hosting choice (his call; $0 options only) + domain decision if any | P0 |
 | P7 — Electron desktop (Windows first) | Shell (window, tray, shortcut, autostart, notifications, updater), same frontend + local Express/SQLite | Windows laptop install + Playwright Chromium (already on his list); Microsoft Store identity verification (government ID + selfie) if Store distribution chosen; $99/yr Apple Developer only if/when macOS is wanted | P6 (PWA shell reuses the same UI work); laptop install |
+
+**P7 status, 18 Nov 2026 (branch `electron-app`, NOT merged):** the shell
+is built and verified — window, tray (Freeze toggle, app log, data
+folder), single-instance lock, in-process server lifecycle, clean
+shutdown, navigation guards, app.log; same frontend + local
+Express/SQLite, packaged for Windows (NSIS + zip) and Linux (AppImage
++ tar.gz), unsigned ($0 rule). Packaged Linux app + extracted AppImage:
+27/27 E2E checks each. NOT yet built: autostart, desktop notifications
+from the shell, auto-updater (updates are manual). Windows execution,
+NSIS-on-Linux (needs wine), macOS, and desktop-agent-in-app remain
+unverified/undone — see `DESKTOP-APP.md`.
 | P8 — Phone companion (PWA/TWA) | Installed PWA + Android TWA via Bubblewrap/PWABuilder; iOS Home Screen install | Google Play $25 one-time + 12-tester/14-day closed test (only when genuinely ready for Play); no iOS store path for pure PWA | P6 |
 | P9 — React Native app | Expo app sharing logic/types, rebuilt UI, phone-side SQLite + sync design, push via FCM/APNs | Apple Developer $99/yr if iOS App Store wanted; Mac + Xcode OR EAS free quota for iOS builds; push credentials setup (his taps) | P8 trigger (background sync, widgets, share extension, durable offline, or App Store presence) |
 | P10 — WhatsApp (gated) | Baileys on spare number, owner-only, low volume, Telegram fallback, session/logout handling, WhatsApp evals | Spare phone number (never primary) + QR/pairing scan (his phone) + acceptance of ban/logout risk in writing + fresh §4.7 read before any official-API consideration | P1 (gateway must exist first); spare number; risk acceptance |

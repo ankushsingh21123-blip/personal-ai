@@ -73,7 +73,15 @@ function readToken(userDataDir) {
 
 function launch(binary, userDataDir, logPath) {
   const log = fs.openSync(logPath, 'a');
-  const child = spawn(binary, [`--remote-debugging-port=${CDP_PORT}`], {
+  const child = spawn(binary, [
+    `--remote-debugging-port=${CDP_PORT}`,
+    // Test-environment flags only: this VM runs as root, and Chromium
+    // refuses to start as root with its OS sandbox on. The shipped app
+    // on a normal user account runs WITHOUT these flags (sandbox on).
+    '--no-sandbox',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+  ], {
     env: {
       ...process.env,
       PIPLET_USERDATA: userDataDir,
@@ -129,6 +137,7 @@ async function main() {
     if (!healthy) throw new Error('server never became healthy — see ' + logPath);
     const token = readToken(userDataDir);
     check('server generated a session token in user-data .env.local', token.length >= 32);
+    check('app writes its log file to the user-data dir', fs.existsSync(path.join(userDataDir, 'app.log')));
     const H = { 'Content-Type': 'application/json', 'X-Anku-Token': token };
     const api = async (p, opts = {}) => {
       const r = await fetch(`http://127.0.0.1:${PORT}${p}`, { ...opts, headers: { ...H, ...(opts.headers || {}) } });

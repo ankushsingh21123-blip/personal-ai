@@ -5,6 +5,7 @@
     "playwright": "1.65.1"
   },
   "description": "Ankush Singh's own personal AI — full working, $0. Frontend + backend + SQLite database + server, all wired up. Brain order: Gemini free -> Groq free -> Ollama local. Built on OpenClaw (gateway) + goose (coding agent) as bases; this app is Ankush's own gateway/UI on top, MIT/Apache-2.0 licences kept for the bases.",
+  "desktopName": "app.piplet",
   "engines": {
     "node": ">=24.22.1 <25"
   },
@@ -18,6 +19,7 @@
     "dist": "electron-builder",
     "dist:linux": "electron-builder --linux",
     "dist:win": "electron-builder --win",
+    "dist:win-zip": "electron-builder --win -c.win.target=zip",
     "test": "node --test --test-concurrency=1 tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js tests/cycle3.test.js tests/cycle4.test.js tests/cycle5.test.js tests/cycle6.test.js tests/cycle7.test.js tests/electron.test.js tests/telegram-grammy.test.js",
     "doctor": "node doctor.js"
   },
@@ -30,6 +32,7 @@
   "build": {
     "appId": "app.piplet",
     "productName": "Piplet",
+    "executableName": "Piplet",
     "copyright": "Copyright © 2026 Ankush Singh",
     "asar": true,
     "files": [
@@ -44,7 +47,8 @@
     ],
     "win": {
       "target": ["nsis", "zip"],
-      "icon": "electron/icon.ico"
+      "icon": "electron/icon.ico",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": true,
@@ -56,7 +60,8 @@
     "linux": {
       "target": ["AppImage", "tar.gz"],
       "icon": "electron/icon.png",
-      "category": "Utility"
+      "category": "Utility",
+      "syncDesktopName": true
     }
   }
 }
