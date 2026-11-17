@@ -11,7 +11,7 @@ check() { if [ "$1" = "0" ]; then echo "PASS: $2"; else echo "FAIL: $2"; FAIL=1;
 # which the exec scan below cannot distinguish from a shell call. Their
 # eval() surface is covered by a dedicated check in section 4, and their
 # exec surface by the cycle-2/3/4 test suites instead.
-BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js browser-session.js desktop-input.js computer-use.js"
+BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js telegram-core.js telegram-grammy.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js browser-session.js desktop-input.js computer-use.js"
 SECRET_RE='AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-or-v1-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|[0-9]{6,}:[A-Za-z0-9_-]{30,}|ANKU_TOKEN=[0-9a-f]{10,}'
 
 # 1. Secrets are git-ignored
@@ -65,8 +65,8 @@ grep -q "allowLoopback: false" tools.js server.js; check $? "agent tool path + A
 grep -q "download_blocked" browser-session.js; check $? "unapproved downloads are blocked and deleted"
 grep -q "data/downloads/" .gitignore ../.gitignore; check $? "approved-downloads dir is git-ignored (app + root)"
 # 4c. Product-expansion gates (14 Nov 2026)
-grep -q "looksLikeSecret" telegram.js whatsapp.js; check $? "key-refusal check present in telegram + whatsapp"
-grep -q "KEY_REFUSAL" telegram.js whatsapp.js; check $? "key-refusal reply present in telegram + whatsapp"
+grep -q "looksLikeSecret" telegram-core.js whatsapp.js; check $? "key-refusal check present in telegram core + whatsapp"
+grep -q "KEY_REFUSAL" telegram.js telegram-core.js whatsapp.js; check $? "key-refusal reply present in telegram + whatsapp"
 grep -q "SETTING_VARS" settings.js; check $? "settings allowlist (SETTING_VARS) present"
 grep -q "ANKU_TOKEN:" settings.js; [ "$?" = "1" ]; check $? "ANKU_TOKEN is not a settable variable in settings.js"
 grep -q "writeEnvUpdates" server.js; check $? "settings writes go through the validated writer"
@@ -86,7 +86,8 @@ grep -q "DELETE FROM memory_facts" memory.js; check $? "forget() hard-deletes me
 [ "$(grep -c 'assertWritablePath(p)' tools.js)" -ge 3 ]; check $? "H-4: app-write gate wired into create/edit/append (3 call sites)"
 grep -q "excerpt: redact(" tools.js; check $? "H-1: search_files excerpts are redacted"
 grep -q "DENIED_PATHS.some(re => re.test(e.name)" tools.js; check $? "H-1: search_files walk checks the deny list per file"
-grep -q "no TELEGRAM_CHAT_ID configured" telegram.js; check $? "H-3: Telegram refuses all chats until a chat id is set"
+grep -q "no TELEGRAM_CHAT_ID configured" telegram-core.js; check $? "H-3: Telegram refuses all chats until a chat id is set (core shared by both transports)"
+grep -q "handleTelegramMessage" telegram.js telegram-grammy.js; check $? "both Telegram transports share telegram-core.js gating"
 grep -q "WHATSAPP_ALLOWED_SENDER" whatsapp.js; check $? "M-4: WhatsApp sender allowlist present"
 grep -q "getConfiguredOrder" settings.js server.js; check $? "H-5: configured provider order is served (not just the resolved chain)"
 grep -q "shell characters" settings.js; check $? "M-7: secret validation rejects shell metacharacters"
@@ -101,6 +102,21 @@ grep -q 'style="' public/app.js; [ "$?" = "1" ]; check $? "H-10: no inline style
 grep -q "max-width:100%" public/style.css; check $? "H-10: replay image sizing lives in CSS"
 grep -q "data-approval-decide" public/app.js; check $? "H-6: approvals decidable from the UI"
 grep -q "sectionError" public/app.js; check $? "H-7: loaders render per-section error states"
+# 4g. Electron shell gates (cycle 7): the desktop window is a sandboxed
+# UI host, not a Node runtime. One IPC channel, loopback-only.
+grep -q "contextIsolation: true" electron/main.js; check $? "electron: contextIsolation on"
+grep -q "nodeIntegration: false" electron/main.js; check $? "electron: nodeIntegration off"
+grep -q "nodeIntegration: true" electron/main.js; [ "$?" = "1" ]; check $? "electron: nodeIntegration never enabled"
+grep -q "sandbox: true" electron/main.js; check $? "electron: renderer sandboxed"
+grep -q "requestSingleInstanceLock" electron/main.js; check $? "electron: single-instance lock"
+grep -q "will-navigate" electron/main.js; check $? "electron: navigation guard present"
+grep -q "setWindowOpenHandler" electron/main.js; check $? "electron: new-window handler denies in-window popups"
+[ "$(grep -c "ipcRenderer.invoke" electron/preload.js)" = "1" ]; check $? "electron: preload exposes exactly one IPC invoke"
+grep -q "ipcRenderer.invoke('piplet:token')" electron/preload.js; check $? "electron: the one preload channel is the session token"
+[ "$(grep -c "ipcMain.handle" electron/main.js)" = "1" ]; check $? "electron: main handles exactly one IPC channel"
+grep -qE "\\beval\\s*\\(" electron/main.js electron/preload.js electron/paths.js; [ "$?" = "1" ]; check $? "electron: no eval() in shell files"
+grep -q '"asar": true' package.json; check $? "electron-builder: asar packaging on"
+grep -q '^dist/$' .gitignore; check $? "electron build output (dist/) is git-ignored"
 # 5. Auth + rate limit present
 grep -q "X-Anku-Token" server.js; check $? "token auth present"
 grep -q "rateLimit" server.js; check $? "rate limit present"

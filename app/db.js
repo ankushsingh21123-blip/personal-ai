@@ -18,8 +18,12 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
-fs.mkdirSync(DATA_DIR, { recursive: true });
+// PIPLET_DATA_DIR lets the desktop app (Electron) keep its data in the
+// OS user-data dir: the packaged app lives in a read-only asar. Default
+// is unchanged: data/ beside this file. Only the DB file's parent dir
+// is created here — creating DATA_DIR unconditionally would fail inside
+// an asar when the DB lives elsewhere.
+const DATA_DIR = process.env.PIPLET_DATA_DIR || path.join(__dirname, 'data');
 // PIPLET_DB_PATH lets the eval harness (scripts/run-eval.js) and other
 // throwaway runs use a temporary database instead of the real one. Default
 // is unchanged: the persistent DB in data/. Never point this at a shared

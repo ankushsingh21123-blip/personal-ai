@@ -9,3 +9,4 @@ data/*.db-wal
 data/wa-auth/
 data/shots/
 data/downloads/
+dist/

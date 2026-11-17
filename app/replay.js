@@ -24,7 +24,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { assertNotFrozen } = require('./freeze');
 
-const SHOTS_DIR = path.join(__dirname, 'data', 'shots');
+// PIPLET_DATA_DIR override: the desktop app (Electron) keeps shots in
+// the OS user-data dir (the packaged app is a read-only asar). Default
+// is unchanged: data/shots/ beside this file.
+const SHOTS_DIR = path.join(process.env.PIPLET_DATA_DIR || path.join(__dirname, 'data'), 'shots');
 const MAX_SHOTS = 200;
 
 function ensureShotsDir() {

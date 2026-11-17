@@ -47,5 +47,5 @@ fi
 # files raced on that state and flaked intermittently (browser freeze-gate
 # failure, sync count mismatch — both seen 18 Nov 2026). Serial runs are
 # slower but deterministic; the suite is the push gate, so determinism wins.
-node --test --test-concurrency=1 tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js tests/cycle3.test.js tests/cycle4.test.js tests/cycle5.test.js tests/cycle6.test.js tests/cycle7.test.js
+node --test --test-concurrency=1 tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js tests/cycle3.test.js tests/cycle4.test.js tests/cycle5.test.js tests/cycle6.test.js tests/cycle7.test.js tests/electron.test.js tests/telegram-grammy.test.js
 echo "TESTS DONE — server log: /tmp/ankush-ai-test-server.log"

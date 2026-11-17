@@ -2,7 +2,10 @@
 // once in the prompt (it lives in .env.local on the server). No external CDN,
 // no tracking, no data leaves 127.0.0.1.
 let token = sessionStorage.getItem('anku_token') || '';
-if (!token) {
+// In the desktop app the preload bridge supplies the token (see the
+// async init at the bottom) — never prompt there. In a plain browser
+// the owner pastes it once, as before.
+if (!token && !(window.piplet && window.piplet.getToken)) {
   token = prompt('Piplet token (from .env.local in the app folder):') || '';
   sessionStorage.setItem('anku_token', token);
 }
@@ -25,7 +28,9 @@ function loadAll() {
   loadQueue(); loadRoutines(); loadSettings(); loadNotifications(); loadSync(); loadReplay();
   loadSkills(); loadMemoryFacts();
 }
-const H = { 'Content-Type': 'application/json', 'X-Anku-Token': token };
+// `let`, not `const`: the desktop-app init below may resolve the token
+// from the preload bridge after load and rebuild these headers.
+let H = { 'Content-Type': 'application/json', 'X-Anku-Token': token };
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { ...H, ...(opts.headers || {}) } });
   const j = await r.json().catch(() => ({}));
@@ -126,6 +131,7 @@ async function loadSettings(opts = {}) {
       `<p>Telegram — token ${s.channels.telegram.tokenConfigured ? `configured ${esc(s.channels.telegram.tokenMasked || '')}` : 'missing'} · chat id ${esc(s.channels.telegram.chatId || 'not set')}</p>` +
       `<input type="password" data-key="TELEGRAM_BOT_TOKEN" placeholder="Telegram bot token (from @BotFather)" autocomplete="off" maxlength="500"> ` +
       `<input data-field="TELEGRAM_CHAT_ID" value="${esc(s.channels.telegram.chatId)}" placeholder="Telegram chat id" maxlength="20"> ` +
+      `<select data-field="TELEGRAM_TRANSPORT" title="Telegram transport — takes effect on restart"><option value="polling"${s.channels.telegram.transport !== 'grammy' ? ' selected' : ''}>polling (built-in)</option><option value="grammy"${s.channels.telegram.transport === 'grammy' ? ' selected' : ''}>grammy</option></select> ` +
       `<p>Sync — peer ${esc(s.channels.sync.peerUrl || 'not set')} · token ${s.channels.sync.tokenConfigured ? `configured ${esc(s.channels.sync.tokenMasked || '')}` : 'missing'}</p>` +
       `<input data-field="SYNC_PEER_URL" value="${esc(s.channels.sync.peerUrl)}" placeholder="Sync peer URL (https, or http to Tailscale 100.x)" maxlength="500"> ` +
       `<input type="password" data-key="SYNC_TOKEN" placeholder="Sync token" autocomplete="off" maxlength="500">`;
@@ -419,10 +425,24 @@ document.getElementById('lang-select').addEventListener('change', e => {
   // list contents switch language on their next refresh.
 });
 applyLang();
-if (!token) {
-  // No token (prompt cancelled): say so plainly instead of firing eleven
-  // calls that all 401. Refreshing the page asks for the token again.
-  document.getElementById('status').textContent = t('token_missing');
-} else {
-  loadAll();
-}
+(async () => {
+  // Desktop app: the preload bridge hands over the session token, so
+  // the owner is never prompted. A bridge failure falls through to the
+  // no-token state below (plain message, no 401 storm) instead of
+  // hanging the page.
+  if (!token && window.piplet && window.piplet.getToken) {
+    try { token = await window.piplet.getToken(); } catch { token = ''; }
+    if (token) {
+      sessionStorage.setItem('anku_token', token);
+      H = { 'Content-Type': 'application/json', 'X-Anku-Token': token };
+    }
+  }
+  if (!token) {
+    // No token (prompt cancelled / bridge unavailable): say so plainly
+    // instead of firing eleven calls that all 401. Refreshing the page
+    // asks for the token again.
+    document.getElementById('status').textContent = t('token_missing');
+  } else {
+    loadAll();
+  }
+})();

@@ -23,7 +23,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { mask, redact } = require('./secrets');
 
-const ENV_PATH = path.join(__dirname, '.env.local');
+// PIPLET_ENV_PATH override: the desktop app (Electron) keeps .env.local
+// in the OS user-data dir (the packaged app is a read-only asar).
+// Default is unchanged: .env.local beside this file.
+const ENV_PATH = process.env.PIPLET_ENV_PATH || path.join(__dirname, '.env.local');
 
 // --- validation schema (allowlist) ------------------------------------------
 const ORDER_NAMES = new Set(['gemini', 'gemini-direct', 'gemini-vm-helper', 'groq', 'openai', 'anthropic', 'ollama']);
@@ -91,6 +94,11 @@ function validateValue(name, value) {
       if (['0', 'no', 'false', 'off'].includes(v)) return schema.normalizeTo === 'yes' ? 'no' : '0';
       throw new Error(`${name} must be yes/no`);
     }
+    case 'enum': {
+      const v = value.trim().toLowerCase();
+      if (!schema.values.includes(v)) throw new Error(`${name} must be one of: ${schema.values.join(', ')}`);
+      return v;
+    }
     case 'path': {
       if (value.length === 0 || value.length > 500) throw new Error(`${name} must be 1..500 characters`);
       if (/[;|&$`\n]/.test(value)) throw new Error(`${name} must not contain shell characters`);
@@ -120,6 +128,11 @@ const SETTING_VARS = {
   BRAIN_PROVIDERS: { kind: 'order' },
   TELEGRAM_CHAT_ID: { kind: 'chatid' },
   TELEGRAM_ENABLED: { kind: 'bool', normalizeTo: 'yes' },
+  // Telegram transport: 'polling' = the built-in fetch poller (default,
+  // unchanged behaviour); 'grammy' = the grammY-based poller. Both run
+  // the same fail-closed gating in telegram-core.js. Takes effect on
+  // restart — the bot is started once at server boot.
+  TELEGRAM_TRANSPORT: { kind: 'enum', values: ['polling', 'grammy'] },
   FAST_ROUTING: { kind: 'bool', normalizeTo: '1' },
   ADB_PATH: { kind: 'path' },
 };
@@ -250,6 +263,7 @@ function getChannelStatus() {
       tokenMasked: mask(process.env.TELEGRAM_BOT_TOKEN || ''),
       chatId: process.env.TELEGRAM_CHAT_ID || '',
       enabled: process.env.TELEGRAM_ENABLED !== 'no',
+      transport: process.env.TELEGRAM_TRANSPORT === 'grammy' ? 'grammy' : 'polling',
     },
     sync: {
       peerUrl: process.env.SYNC_PEER_URL || '',

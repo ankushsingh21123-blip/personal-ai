@@ -30,9 +30,7 @@
 // proven (no token on this VM).
 'use strict';
 
-const { looksLikeSecret } = require('./secrets');
-
-const KEY_REFUSAL = 'I cannot accept API keys in chat — chat history must never hold a key. Add it in the Settings page of the web UI (open the app on the laptop, Settings → Providers), or edit .env.local directly. Use /providers to see which providers are configured.';
+const { handleTelegramMessage, KEY_REFUSAL } = require('./telegram-core');
 
 const API = 'https://api.telegram.org/bot';
 
@@ -97,71 +95,15 @@ class TelegramBot {
     const msg = update?.message;
     if (!msg || typeof msg.text !== 'string') return { handled: false };
     const fromId = String(msg.chat?.id || '');
-    // Chat lock, fail-closed (H-3): with no chat id configured, refuse
-    // EVERYONE — including /start — and log the refused chat. With a chat
-    // id configured, only that chat is answered; others are logged and
-    // refused with no reply. Message text is never logged.
-    const allowed = this.effectiveChatId;
-    if (!allowed) {
-      console.error(`[personal-ai] telegram: refused update from chat ${fromId || '(unknown)'} — no TELEGRAM_CHAT_ID configured`);
-      return { handled: false, reason: 'telegram chat id not configured — refusing all chats until TELEGRAM_CHAT_ID is set' };
-    }
-    if (fromId !== allowed) {
-      console.error(`[personal-ai] telegram: refused update from unauthorised chat ${fromId || '(unknown)'}`);
-      return { handled: false, reason: 'chat not authorised' };
-    }
-    const text = msg.text.trim();
-    if (!text) return { handled: false };
-
-    // Key refusal: BEFORE any command or agent handling. A pasted key is
-    // never forwarded to the agent turn and never stored — the message is
-    // refused with instructions for the Settings page.
-    if (looksLikeSecret(text)) {
-      await this.sendMessage(fromId, KEY_REFUSAL);
-      return { handled: true, command: 'key_refused' };
-    }
-
-    if (text === '/start') {
-      await this.sendMessage(fromId, 'Piplet — Ankush\'s Personal AI here. Send any message and I will work on it like a chat turn. Commands: /status /providers /freeze /unfreeze /approve <id> /reject <id>. I never send, post or spend — approvals are drafts only. Never paste API keys here — use the Settings page.');
-      return { handled: true, command: 'start' };
-    }
-    if (text === '/providers' && this.handlers.getProviderStatus) {
-      const rows = await this.handlers.getProviderStatus();
-      const lines = (rows || []).map(p => {
-        const state = p.configured ? `configured ${p.masked || ''}` : 'missing';
-        const test = p.lastTest ? (p.lastTest.ok ? `last test OK (${p.lastTest.ms ?? '?'}ms)` : 'last test FAILED') : 'never tested';
-        return `${p.label}: ${state} — ${test}`;
-      });
-      await this.sendMessage(fromId, `Providers (status only — keys are added in the Settings page):\n${lines.join('\n')}`);
-      return { handled: true, command: 'providers' };
-    }
-    if (text === '/status' && this.handlers.getStatus) {
-      const s = await this.handlers.getStatus();
-      await this.sendMessage(fromId, `Brain: ${(s.brain_order || []).join(' → ')}\nFrozen: ${s.frozen}\nQueue: ${JSON.stringify(s.queue || {})}\nApprovals pending: ${s.approvals_pending ?? '?'}`);
-      return { handled: true, command: 'status' };
-    }
-    if (text === '/freeze' && this.handlers.setFrozen) {
-      const st = this.handlers.setFrozen(true, 'telegram /freeze');
-      await this.sendMessage(fromId, `Frozen. Agent stopped. /unfreeze to resume.`);
-      return { handled: true, command: 'freeze', state: st };
-    }
-    if (text === '/unfreeze' && this.handlers.setFrozen) {
-      const st = this.handlers.setFrozen(false);
-      await this.sendMessage(fromId, 'Unfrozen. Agent resumed.');
-      return { handled: true, command: 'unfreeze', state: st };
-    }
-    const decide = text.match(/^\/(approve|reject)\s+(\d+)$/);
-    if (decide && this.handlers.decideApproval) {
-      const out = await this.handlers.decideApproval(Number(decide[2]), decide[1] === 'approve' ? 'approved' : 'rejected');
-      await this.sendMessage(fromId, out?.error ? `Approval error: ${out.error}` : `Approval #${decide[2]} ${decide[1]}d. Recorded only — nothing was sent or executed.`);
-      return { handled: true, command: decide[1] };
-    }
-    if (this.handlers.onMessage) {
-      const reply = await this.handlers.onMessage(text, { chatId: fromId, source: 'telegram' });
-      await this.sendMessage(fromId, reply);
-      return { handled: true, command: 'message' };
-    }
-    return { handled: false, reason: 'no message handler' };
+    // All gating + commands live in telegram-core.js, shared with the
+    // grammY transport — this method only adapts the update shape.
+    return handleTelegramMessage({
+      text: msg.text,
+      fromId,
+      allowedChatId: this.effectiveChatId,
+      handlers: this.handlers,
+      send: (t) => this.sendMessage(fromId, t),
+    });
   }
 
   start(intervalMs = 5000) {

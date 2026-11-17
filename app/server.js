@@ -68,7 +68,10 @@ const routeMod = require('./route');
 const { redact } = require('./secrets');
 
 // --- .env.local (git-ignored) ------------------------------------------------
-const ENV_PATH = path.join(__dirname, '.env.local');
+// PIPLET_ENV_PATH lets the desktop app (Electron) keep its .env.local in
+// the OS user-data dir: the packaged app lives in a read-only asar and
+// cannot write beside its own code. Default is unchanged.
+const ENV_PATH = process.env.PIPLET_ENV_PATH || path.join(__dirname, '.env.local');
 function loadEnv() {
   if (!fs.existsSync(ENV_PATH)) return;
   for (const line of fs.readFileSync(ENV_PATH, 'utf8').split('\n')) {
@@ -902,10 +905,14 @@ if (process.env.DISABLE_SCHEDULER !== '1') {
 }
 
 // --- Telegram bot (phone-as-remote): polls only when a token exists ---------
+// Transport: TELEGRAM_TRANSPORT=grammy selects the grammY poller
+// (telegram-grammy.js); anything else uses the built-in fetch poller
+// (telegram.js). Both run the same gating in telegram-core.js. If the
+// grammY package is unavailable, the built-in poller is used instead
+// and the fallback is logged loudly — the bot never silently dies.
 let telegramBot = null;
 if (process.env.TELEGRAM_ENABLED !== 'no') {
-  const bot = new TelegramBot({
-    handlers: {
+  const telegramHandlers = {
       onMessage: async (text) => {
         const turn = await agentTurn(text);
         run('INSERT INTO messages (role, content, model, provider) VALUES (?, ?, ?, ?)', 'assistant', turn.reply, turn.model, turn.provider);
@@ -928,8 +935,18 @@ if (process.env.TELEGRAM_ENABLED !== 'no') {
       },
       setFrozen: (frozen, reason) => freeze.setFrozen(frozen, reason),
       freezeState: () => freeze.freezeState(),
-    },
-  });
+  };
+  let bot = null;
+  if (process.env.TELEGRAM_TRANSPORT === 'grammy') {
+    try {
+      const { createGrammyBot } = require('./telegram-grammy');
+      bot = createGrammyBot({ handlers: telegramHandlers });
+      console.log('[personal-ai] telegram transport: grammy');
+    } catch (e) {
+      console.error('[personal-ai] telegram grammy transport unavailable, falling back to built-in poller:', e.message);
+    }
+  }
+  if (!bot) bot = new TelegramBot({ handlers: telegramHandlers });
   if (bot.enabled) {
     telegramBot = bot;
     try { bot.start(); console.log('[personal-ai] telegram bot polling started'); }

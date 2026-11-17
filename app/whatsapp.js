@@ -28,7 +28,7 @@ const path = require('path');
 const { looksLikeSecret } = require('./secrets');
 const { KEY_REFUSAL } = require('./telegram');
 
-const AUTH_DIR = path.join(__dirname, 'data', 'wa-auth');
+const AUTH_DIR = path.join(process.env.PIPLET_DATA_DIR || path.join(__dirname, 'data'), 'wa-auth');
 
 function guards() {
   const problems = [];
