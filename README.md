@@ -74,13 +74,13 @@ Verify an install any time with `npm run doctor` in `app/`.
 
 ## Status (18 Nov 2026)
 
-228/228 tests pass (22 live-server Phase A + 30 mocked provider unit +
+246/246 tests pass (22 live-server Phase A + 30 mocked provider unit +
 37 Phases B–E + 42 product-expansion + 12 improvement-cycle + 12 cycle-2
-+ 22 cycle-3 + 19 cycle-4 + 27 cycle-5 + 5 cycle-6),
++ 22 cycle-3 + 19 cycle-4 + 27 cycle-5 + 5 cycle-6 + 18 cycle-7),
 including Phase A2 native function calling for OpenAI + Anthropic (unit-tested only,
-mocked fetch — no live keys on the build VM) and 28 deny-first tools;
-cycle 2 added a hash-chained audit log with run receipts and a 20-task
-eval harness (deterministic across repetitions);
+mocked fetch — no live keys on the build VM) and 29 deny-first tools;
+cycle 2 added a hash-chained audit log with run receipts and a 23-task
+eval harness (deterministic across repetitions, incl. 3 computer-use tasks);
 cycle 3 added a skills system (5 human-approved skills, progressively
 disclosed, hash-pinned approval — see `docs/SKILLS.md`) plus Skills and
 Audit panels in the UI;
@@ -93,7 +93,13 @@ frontend Highs — see `audit-2026-11-18.md` and
 `app/tests/TEST-REPORT.md`); the verify-fix cycle added Ollama-only
 generation/timeout bounds so skill-loaded turns complete on slow local
 hardware, and serial test execution after shared-DB flakes;
-58 security checks pass (npm audit skipped on the VM — endpoint
+the computer-use cycle added stateful browser sessions (multi-tab, forms,
+DOM + accessibility tree, screenshots, zoom, console/network
+observation, downloads), DOM CHECK verification after every action,
+desktop input via CDP/Xvfb (proven live on a virtual X11 session), the
+`computer_use` tool (29 tools total), budgeted multi-step flows, and the
+zoom-fixed observe loop;
+64 security checks pass (npm audit skipped on the VM — endpoint
 unreachable, re-run on the laptop). The 17 Nov cycle added 4 tools
 (`create_approval`, `file_info`, `append_file`, `recent_activity`),
 redirect-safe `web_fetch`, and a multilingual UI (English/Hindi/Telugu,

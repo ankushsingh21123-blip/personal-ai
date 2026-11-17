@@ -227,7 +227,7 @@ test('memory: four memory tools are declared and derived for OpenAI + Anthropic'
   for (const n of ['remember_fact', 'recall_memory', 'forget_fact', 'edit_fact']) {
     assert.ok(names.includes(n), `${n} must be declared`);
   }
-  assert.equal(TOOL_DECLARATIONS.length, 28, '24 tools + 4 memory tools');
+  assert.equal(TOOL_DECLARATIONS.length, 29, '24 tools + 4 memory tools + computer_use');
   const oa = openaiTools().map(t => t.function.name);
   const an = anthropicTools().map(t => t.name);
   for (const n of ['remember_fact', 'recall_memory', 'forget_fact', 'edit_fact']) {

@@ -23,7 +23,7 @@ before it runs, and validation lives in code the model cannot change
 by asking. Screen and page content is untrusted data, never
 instructions.
 
-## 2. Chat tools (28) — `tools.js` + `brain.js` declarations
+## 2. Chat tools (29) — `tools.js` + `brain.js` declarations
 
 | Tool | What it does | Gate |
 |---|---|---|
@@ -55,6 +55,7 @@ instructions.
 | `clipboard_set` | Write the clipboard (4k chars) | — |
 | `create_routine` | Create a scheduled routine | Schedule validated; routines can only be stricter, never looser |
 | `list_routines` | List routines + next runs | — |
+| `computer_use` | Full browser + desktop control in a stateful session kept across turns (see §4b) | Password fields refused; submit/upload/download need approved approval ids; every action DOM-verified + audit-logged |
 
 Anything else — send, post, spend, delete, publish, unknown — is
 denied and audit-logged. The agent's sanctioned path for those requests
@@ -80,6 +81,39 @@ Element-first: `snapshot`, `click_ref`, `type_ref`, `find_text`,
 `back`, `forward`, `text`, `title`, `screenshot`, `wait`. Selector
 path: `click`, `type` (password fields refused). Stale references fail
 instead of acting on the wrong element; ambiguous text is refused.
+Single-shot: one page per request, closed afterwards.
+
+## 4b. Stateful browser sessions + desktop input (computer-use cycle, 18 Nov 2026) — `browser-session.js` / `desktop-input.js` / `computer-use.js`
+
+The `computer_use` tool keeps a persistent Playwright context alive
+across turns: tabs (`new_tab`, `switch_tab`, `close_tab`, `list_tabs`,
+cap 10), navigation (`navigate`, `back`, `forward`, `reload`), forms
+(`click`, `type`, `select`, `check`, `set_files`, `submit` — by
+snapshot index, CSS selector, ARIA role+name, or visible text),
+reading (`snapshot`, `a11y`, `dom`, `text`, `title`, `url`),
+`scroll`, `wait` (selector/text/network-idle), `screenshot`
+(viewport/full-page/clip), `zoom` (region capture), `dom_check`
+(assertions), `observe` (capped console + network buffers), and
+`close`. Sessions idle-close after 10 minutes. Desktop input runs
+through CDP (`desktop_click`, `desktop_type`, `desktop_key`,
+`desktop_screenshot`) into a real X session, with `desktop_probe`
+reporting which backends exist on the machine; xdotool/ydotool argv
+builders exist but execution is unproven (binaries absent on the VM).
+
+Verification is structural, not claimed: every mutating action records
+a pre/post state digest (url/title/text-hash) and may carry `expect`
+DOM-check assertions that must pass for the step to count as done.
+`runFlow` runs scripted multi-step flows against a turn budget and
+stops on the first failed step. `runObserveLoop` is the
+vision-grounded loop with the zoom fix: a zoom action's region capture
+becomes the next observation. Gates: password/credential fields are
+refused outright; `submit`, `set_files` (workspace-confined uploads),
+and downloads require an approved approval record; unapproved
+downloads are cancelled and deleted; screenshots and audit rows stay
+local. Proven live: Xvfb + headed Chromium + CDP click changing the
+DOM (`app/scripts/computer-use-demo.js`). Unproven: physical laptop
+desktop, xdotool/ydotool execution, X11 root screenshots, the
+vision loop end-to-end (no key), external https navigation.
 
 ## 5. Phone actions (11) — `phone.js` (Android, ADB allowlist)
 

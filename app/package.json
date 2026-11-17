@@ -13,7 +13,7 @@
   "scripts": {
     "security": "bash scripts/security-check.sh",
     "start": "node server.js",
-    "test": "node --test tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js",
+    "test": "node --test --test-concurrency=1 tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js tests/cycle3.test.js tests/cycle4.test.js tests/cycle5.test.js tests/cycle6.test.js tests/cycle7.test.js",
     "doctor": "node doctor.js"
   },
   "type": "commonjs",

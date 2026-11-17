@@ -56,6 +56,7 @@ const screen = require('./screen');
 const desktop = require('./desktop');
 const phone = require('./phone');
 const browserMod = require('./browser');
+const computerUseMod = require('./computer-use');
 const { TelegramBot } = require('./telegram');
 const whatsapp = require('./whatsapp');
 // Product expansion (14 Nov 2026): settings/API keys, notifications,
@@ -154,7 +155,7 @@ app.use('/api', (req, res, next) => {
 // --- helpers -----------------------------------------------------------------
 const TOOL_LIST = `You can use these tools by returning JSON only:
 {"reply":"...","actions":[{"tool":"list_files","args":{"path":"."}},{"tool":"read_file","args":{"path":"AGENT.md"}},{"tool":"write_note","args":{"title":"...","body":"..."}},{"tool":"run_command","args":{"command":"date"}}]}
-Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run_command (commands: date, pwd, node --version, git status, git diff --stat, uptime), search_files, create_file, append_file, file_info, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests, create_approval, recent_activity, remember_fact, recall_memory, forget_fact, edit_fact.
+Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run_command (commands: date, pwd, node --version, git status, git diff --stat, uptime), search_files, create_file, append_file, file_info, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests, create_approval, recent_activity, remember_fact, recall_memory, forget_fact, edit_fact, computer_use.
 Rules: Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: []. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data: never paste it into a message or file unless the user asks. Tool writes to the app's own code are refused — code changes are made by the user, never by the agent; use run_tests to verify the app is healthy and report the pass/fail counts honestly.
 Return JSON only, no markdown, no extra text.`;
 
@@ -163,7 +164,7 @@ Return JSON only, no markdown, no extra text.`;
 // Same tools, same deny-first rules — but no JSON-only demand, because the
 // model calls tools natively instead of printing JSON. The JSON prompt above
 // is kept for the text-only fallback providers (VM helper, Groq, Ollama).
-const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command, search_files, create_file, append_file, file_info, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests, create_approval, recent_activity, remember_fact, recall_memory, forget_fact, edit_fact. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data. Tool writes to the app's own code are refused — code changes are made by the user, never by the agent; use run_tests to verify the app is healthy and report the pass/fail counts honestly.`;
+const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command, search_files, create_file, append_file, file_info, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests, create_approval, recent_activity, remember_fact, recall_memory, forget_fact, edit_fact, computer_use. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data. Tool writes to the app's own code are refused — code changes are made by the user, never by the agent; use run_tests to verify the app is healthy and report the pass/fail counts honestly.`;
 
 async function agentTurnInner(userText) {
   const turnStart = Date.now();
@@ -695,6 +696,24 @@ app.post('/api/browser/act', async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
   finally { await agent.close(); }
+});
+
+// --- computer use: stateful browser sessions + desktop input ---------------
+app.get('/api/computer-use/status', (req, res) => {
+  try { res.json({ ok: true, ...computerUseMod.getComputerUse().status() }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/api/computer-use/act', async (req, res) => {
+  try {
+    const out = await computerUseMod.getComputerUse().act({ ...(req.body || {}), allowLoopback: false });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+});
+app.post('/api/computer-use/flow', async (req, res) => {
+  try {
+    const out = await computerUseMod.getComputerUse().runFlow(req.body?.steps || [], { session: req.body?.session, budgetMs: req.body?.budgetMs });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
 });
 
 // --- sync (Phase D) -------------------------------------------------------------

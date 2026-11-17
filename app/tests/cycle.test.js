@@ -27,7 +27,7 @@ async function tool(name, args) {
   return api('/api/tools', { method: 'POST', body: JSON.stringify({ tool: name, args }) });
 }
 
-const WORKSPACE = path.join(os.homedir(), 'workspace', 'personal-ai');
+const WORKSPACE = process.env.WORKSPACE || path.join(os.homedir(), 'workspace', 'personal-ai');
 
 // --- create_approval: draft only, never executes ---------------------------
 test('tools: create_approval records a pending draft and never executes', async () => {
@@ -115,12 +115,12 @@ test('tools: recent_activity returns newest-first audit rows, capped at 20', asy
   assert.equal(one.body.activity.length, 1);
 });
 
-// --- declarations: 28 tools, derived schemas stay in sync -------------------
-test('brain: derived OpenAI/Anthropic schemas include the 4 new tools', () => {
+// --- declarations: 29 tools, derived schemas stay in sync -------------------
+test('brain: derived OpenAI/Anthropic schemas include the new tools', () => {
   const brain = require('../brain');
-  assert.equal(brain.TOOL_DECLARATIONS.length, 28);
+  assert.equal(brain.TOOL_DECLARATIONS.length, 29);
   const names = brain.TOOL_DECLARATIONS.map(d => d.name);
-  for (const n of ['create_approval', 'file_info', 'append_file', 'recent_activity']) assert.ok(names.includes(n));
+  for (const n of ['create_approval', 'file_info', 'append_file', 'recent_activity', 'remember_fact', 'recall_memory', 'forget_fact', 'edit_fact', 'computer_use']) assert.ok(names.includes(n));
   assert.deepEqual(brain.openaiTools().map(t => t.function.name).sort(), [...names].sort());
   assert.deepEqual(brain.anthropicTools().map(t => t.name).sort(), [...names].sort());
   assert.ok(!names.some(n => /send|post|spend|delete|email|payment/i.test(n)));

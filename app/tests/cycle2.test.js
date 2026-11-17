@@ -168,7 +168,7 @@ test('eval: a failing task is reported, not fatal, and breaks determinism honest
   assert.equal(report.deterministic, false, 'mixed outcomes must not be called deterministic');
 });
 
-test('eval: CLI runs the full set in a throwaway sandbox, exit 0, 20/20', async () => {
+test('eval: CLI runs the full set in a throwaway sandbox, exit 0, 23/23', async () => {
   const out = await new Promise((resolve, reject) => {
     execFile('node', ['scripts/run-eval.js', '--repeat=1'], {
       cwd: path.join(__dirname, '..'), timeout: 60000, maxBuffer: 1024 * 1024,
@@ -178,11 +178,12 @@ test('eval: CLI runs the full set in a throwaway sandbox, exit 0, 20/20', async 
     });
   });
   const report = JSON.parse(out);
-  assert.equal(report.totals.tasks, 20);
-  assert.equal(report.totals.passed, 20);
+  assert.equal(report.totals.tasks, 23);
+  assert.equal(report.totals.passed, 23);
   assert.equal(report.totals.failed, 0);
   assert.ok(report.tasks.some(t => t.id === 'freeze-gate' && t.passed), 'CLI runs the freeze task too');
   assert.ok(report.tasks.some(t => t.id === 'memory-contradiction' && t.passed), 'CLI runs the memory tasks too');
+  assert.ok(report.tasks.some(t => t.id === 'computer-use-probe' && t.passed), 'CLI runs the computer-use tasks too');
 });
 
 // --- npm test removal from the shell allowlist ---------------------------------

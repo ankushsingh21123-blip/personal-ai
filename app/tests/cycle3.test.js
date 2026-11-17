@@ -199,7 +199,7 @@ test('skills: loading skills cannot change the tool declarations', () => {
   const ctx = skills.buildSkillContext('send the email', dir);
   assert.equal(ctx.loaded.length, 1);
   assert.equal(JSON.stringify(TOOL_DECLARATIONS), before);
-  assert.equal(TOOL_DECLARATIONS.length, 28);
+  assert.equal(TOOL_DECLARATIONS.length, 29);
 });
 
 test('skills: a skill claiming new powers does not widen tools.execute', async () => {

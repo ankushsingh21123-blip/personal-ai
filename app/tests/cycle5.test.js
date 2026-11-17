@@ -603,9 +603,9 @@ test('frontend: new i18n keys exist in all three languages', () => {
   }
 });
 
-test('prompts: fallback prompt strings list all 28 tools and no self-modification demand', () => {
+test('prompts: fallback prompt strings list all 29 tools and no self-modification demand', () => {
   const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  for (const tool of ['remember_fact', 'recall_memory', 'forget_fact', 'edit_fact', 'create_approval', 'file_info', 'append_file', 'recent_activity']) {
+  for (const tool of ['remember_fact', 'recall_memory', 'forget_fact', 'edit_fact', 'create_approval', 'file_info', 'append_file', 'recent_activity', 'computer_use']) {
     assert.ok(serverSrc.includes(tool), `server prompts must list ${tool}`);
   }
   assert.ok(!serverSrc.includes('self-modification'), 'no self-modification demand may remain in server prompts');

@@ -126,7 +126,8 @@ test('tools: edit_file with backup, then restore', async () => {
   const p = require('path');
   const os = require('os');
   const notePath = 'tests/_edit-test.txt';
-  const full = p.join(os.homedir(), 'workspace', 'personal-ai', notePath);
+  const wsRoot = process.env.WORKSPACE || p.join(os.homedir(), 'workspace', 'personal-ai');
+  const full = p.join(wsRoot, notePath);
   fs2.writeFileSync(full, 'hello world\n', 'utf8');
   const r = await api('/api/tools', { method: 'POST', body: JSON.stringify({ tool: 'edit_file', args: { path: notePath, old_text: 'hello', new_text: 'hello Ankush' } }) });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -179,7 +180,7 @@ test('brain: native tool declarations mirror the allowlisted tools exactly', asy
     'search_files', 'create_file', 'search_notes', 'notify', 'screenshot', 'screen_act',
     'list_windows', 'focus_window', 'open_app', 'clipboard_get', 'clipboard_set',
     'create_routine', 'list_routines', 'run_tests', 'create_approval', 'file_info',
-    'append_file', 'recent_activity', 'remember_fact', 'recall_memory', 'forget_fact', 'edit_fact'];
+    'append_file', 'recent_activity', 'remember_fact', 'recall_memory', 'forget_fact', 'edit_fact', 'computer_use'];
   assert.deepEqual(brain.TOOL_DECLARATIONS.map(d => d.name).sort(), [...expected].sort());
   for (const d of brain.TOOL_DECLARATIONS) {
     assert.equal(typeof d.description, 'string');

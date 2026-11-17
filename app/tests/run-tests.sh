@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Run the real tests against a LIVE server. No mocks.
 # Usage: bash tests/run-tests.sh
+# Serial execution (--test-concurrency=1): test files share one SQLite DB,
+# and the freeze tests toggle persisted state — parallel files raced each
+# other (frozen-state flakes, 18 Nov 2026). Serial is slower and honest.
+# WORKSPACE is scoped to this checkout's root so worktree runs never write
+# into another checkout's workspace (download tests, scratch files).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+export WORKSPACE="${WORKSPACE:-$REPO_ROOT}"
 PORT="${PORT:-3100}"
 if [ -f .env.local ]; then
   # M-7: parse .env.local as DATA, never source it — a stored value
@@ -40,5 +47,5 @@ fi
 # files raced on that state and flaked intermittently (browser freeze-gate
 # failure, sync count mismatch — both seen 18 Nov 2026). Serial runs are
 # slower but deterministic; the suite is the push gate, so determinism wins.
-node --test --test-concurrency=1 tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js tests/cycle3.test.js tests/cycle4.test.js tests/cycle5.test.js tests/cycle6.test.js
+node --test --test-concurrency=1 tests/test.js tests/providers.test.js tests/phases.test.js tests/product.test.js tests/cycle.test.js tests/cycle2.test.js tests/cycle3.test.js tests/cycle4.test.js tests/cycle5.test.js tests/cycle6.test.js tests/cycle7.test.js
 echo "TESTS DONE — server log: /tmp/ankush-ai-test-server.log"

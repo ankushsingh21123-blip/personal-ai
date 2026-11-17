@@ -11,7 +11,7 @@ check() { if [ "$1" = "0" ]; then echo "PASS: $2"; else echo "FAIL: $2"; FAIL=1;
 # which the exec scan below cannot distinguish from a shell call. Their
 # eval() surface is covered by a dedicated check in section 4, and their
 # exec surface by the cycle-2/3/4 test suites instead.
-BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js"
+BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js browser-session.js desktop-input.js computer-use.js"
 SECRET_RE='AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-or-v1-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|[0-9]{6,}:[A-Za-z0-9_-]{30,}|ANKU_TOKEN=[0-9a-f]{10,}'
 
 # 1. Secrets are git-ignored
@@ -56,6 +56,14 @@ grep -q "WHATSAPP_SPARE_NUMBER_CONFIRMED" whatsapp.js; check $? "whatsapp spare-
 grep -q "sensitive" desktop.js phone.js browser.js; check $? "sensitive-action refusal present in desktop/phone/browser"
 grep -q "assertNotFrozen\|isFrozen" desktop.js phone.js browser.js queue.js routines.js; check $? "freeze checks present in agent loops"
 grep "BROWSER_ACTIONS = " browser.js | grep -qE "submit|send|post"; [ "$?" = "1" ]; check $? "browser action set has no submit/post/send action"
+# 4b2. Computer-use gates (18 Nov 2026): password refusal, approval-gated
+# submit/upload/download, freeze checks, loopback only via session option.
+grep -q "password/credential field" browser-session.js; check $? "browser session refuses password/credential fields"
+grep -q "_checkApproved" browser-session.js; check $? "browser session approval gate present (submit/upload/download)"
+grep -q "assertNotFrozen" browser-session.js computer-use.js; check $? "freeze checks present in browser session + computer-use facade"
+grep -q "allowLoopback: false" tools.js server.js; check $? "agent tool path + API force allowLoopback off (tests/demo only)"
+grep -q "download_blocked" browser-session.js; check $? "unapproved downloads are blocked and deleted"
+grep -q "data/downloads/" .gitignore ../.gitignore; check $? "approved-downloads dir is git-ignored (app + root)"
 # 4c. Product-expansion gates (14 Nov 2026)
 grep -q "looksLikeSecret" telegram.js whatsapp.js; check $? "key-refusal check present in telegram + whatsapp"
 grep -q "KEY_REFUSAL" telegram.js whatsapp.js; check $? "key-refusal reply present in telegram + whatsapp"

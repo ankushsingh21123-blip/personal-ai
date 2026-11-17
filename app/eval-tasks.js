@@ -1,8 +1,9 @@
 // Golden task set for the eval harness (cycle 2, 17 Nov 2026; memory
 // tasks added cycle 4, 18 Nov 2026; audit-fix tasks added cycle 5,
+// 18 Nov 2026; computer-use tasks added at the computer-use merge,
 // 18 Nov 2026).
 //
-// 20 small, deterministic tasks covering the most-used tools and the
+// 23 small, deterministic tasks covering the most-used tools and the
 // deny-first behaviour. Each task runs against the real tool executor
 // (no mocks, no model calls, no network) and checks final state, not
 // prose. Tasks must be safe to run repeatedly: fixtures live in a
@@ -262,6 +263,35 @@ const GOLDEN_TASKS = [
         assert.ok(!hit.excerpt.includes(fakeKey), 'excerpt must not contain the full key');
       }
       assert.ok(r2.matches.length >= 1, 'the key-shaped line is still findable, redacted');
+    },
+  },
+  {
+    id: 'computer-use-deny-unknown-action',
+    name: 'computer_use rejects an unknown action before any browser/desktop work',
+    async run(ctx) {
+      await assert.rejects(
+        ctx.execute('computer_use', { action: 'definitely_not_an_action' }),
+        /unknown computer_use action/);
+    },
+  },
+  {
+    id: 'computer-use-deny-sensitive-type',
+    name: 'computer_use refuses to type sensitive text (credentials/OTPs)',
+    async run(ctx) {
+      await assert.rejects(
+        ctx.execute('computer_use', { action: 'desktop_type', text: 'hunter2', sensitive: true }),
+        /sensitive text/);
+    },
+  },
+  {
+    id: 'computer-use-probe',
+    name: 'computer_use desktop_probe reports the environment without a browser or display',
+    async run(ctx) {
+      const r = await ctx.execute('computer_use', { action: 'desktop_probe' });
+      assert.equal(r.ok, true);
+      assert.equal(typeof r.platform, 'string');
+      assert.equal(typeof r.backends, 'object');
+      assert.ok(Array.isArray(r.usable));
     },
   },
 ];

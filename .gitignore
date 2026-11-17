@@ -11,5 +11,6 @@ data/shots/
 __pycache__/
 app/data/wa-auth/
 app/data/shots/
+app/data/downloads/
 app/data/*.db-shm
 app/data/*.db-wal
