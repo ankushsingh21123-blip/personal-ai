@@ -115,10 +115,10 @@ test('tools: recent_activity returns newest-first audit rows, capped at 20', asy
   assert.equal(one.body.activity.length, 1);
 });
 
-// --- declarations: 24 tools, derived schemas stay in sync -------------------
+// --- declarations: 28 tools, derived schemas stay in sync -------------------
 test('brain: derived OpenAI/Anthropic schemas include the 4 new tools', () => {
   const brain = require('../brain');
-  assert.equal(brain.TOOL_DECLARATIONS.length, 24);
+  assert.equal(brain.TOOL_DECLARATIONS.length, 28);
   const names = brain.TOOL_DECLARATIONS.map(d => d.name);
   for (const n of ['create_approval', 'file_info', 'append_file', 'recent_activity']) assert.ok(names.includes(n));
   assert.deepEqual(brain.openaiTools().map(t => t.function.name).sort(), [...names].sort());

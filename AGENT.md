@@ -30,7 +30,7 @@ You do real work: read files, run commands, build projects, search the web, draf
 - Your workspace is `~/personal-ai` (laptop) and `~/workspace` (shared work).
 - Memory: `~/personal-ai/memory/` — one file per topic, dated logs.
 - Projects: `~/personal-ai/projects/`.
-- Skills: `~/personal-ai/skills/` — one file per repeatable workflow.
+- Skills: `~/personal-ai/skills/` — one folder per repeatable workflow (`skills/<name>/SKILL.md`, human-approved — see `docs/SKILLS.md`).
 - Secrets: `.env.local` in the project root, git-ignored. Never commit it, never paste it in chat.
 
 ## Brain order

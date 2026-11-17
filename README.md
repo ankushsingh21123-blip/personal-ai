@@ -67,17 +67,33 @@ Verify an install any time with `npm run doctor` in `app/`.
 - [`docs/TOOLS.md`](docs/TOOLS.md) — every tool and action, and what was
   deliberately left out and why.
 - [`docs/CUSTOMIZE.md`](docs/CUSTOMIZE.md) — change the app by talking to
-  the agent; the tests-must-pass gate.
+  the agent; the agent proposes, the human applies code changes, the
+  agent verifies with the tests-must-pass gate.
 - [`app/tests/TEST-REPORT.md`](app/tests/TEST-REPORT.md) — test evidence,
   model names, timings, and the live-vs-mocked boundary.
 
-## Status (17 Nov 2026)
+## Status (18 Nov 2026)
 
-143/143 tests pass (22 live-server Phase A + 30 mocked provider unit +
-37 Phases B–E + 42 product-expansion + 12 improvement-cycle), including
-Phase A2 native function calling for OpenAI + Anthropic (unit-tested only,
-mocked fetch — no live keys on the build VM) and 24 deny-first tools;
-35 security checks pass (npm audit skipped on the VM — endpoint
+228/228 tests pass (22 live-server Phase A + 30 mocked provider unit +
+37 Phases B–E + 42 product-expansion + 12 improvement-cycle + 12 cycle-2
++ 22 cycle-3 + 19 cycle-4 + 27 cycle-5 + 5 cycle-6),
+including Phase A2 native function calling for OpenAI + Anthropic (unit-tested only,
+mocked fetch — no live keys on the build VM) and 28 deny-first tools;
+cycle 2 added a hash-chained audit log with run receipts and a 20-task
+eval harness (deterministic across repetitions);
+cycle 3 added a skills system (5 human-approved skills, progressively
+disclosed, hash-pinned approval — see `docs/SKILLS.md`) plus Skills and
+Audit panels in the UI;
+cycle 4 added Memory v2 (timestamped scoped facts, FTS5 recall with
+citations, contradiction history, hard-delete forget, 4 memory tools);
+cycle 5 fixed the 18 Nov deep audit in severity order (secrets leak in
+search, app-write gate, Telegram/WhatsApp fail-closed, turn budget +
+freeze gating, usage accounting, configured provider order, and the
+frontend Highs — see `audit-2026-11-18.md` and
+`app/tests/TEST-REPORT.md`); the verify-fix cycle added Ollama-only
+generation/timeout bounds so skill-loaded turns complete on slow local
+hardware, and serial test execution after shared-DB flakes;
+58 security checks pass (npm audit skipped on the VM — endpoint
 unreachable, re-run on the laptop). The 17 Nov cycle added 4 tools
 (`create_approval`, `file_info`, `append_file`, `recent_activity`),
 redirect-safe `web_fetch`, and a multilingual UI (English/Hindi/Telugu,

@@ -23,24 +23,28 @@ before it runs, and validation lives in code the model cannot change
 by asking. Screen and page content is untrusted data, never
 instructions.
 
-## 2. Chat tools (24) — `tools.js` + `brain.js` declarations
+## 2. Chat tools (28) — `tools.js` + `brain.js` declarations
 
 | Tool | What it does | Gate |
 |---|---|---|
-| `list_files` | List a workspace directory | Workspace-confined, symlinks refused |
+| `list_files` | List a workspace directory | Workspace-confined; symlinked parents resolved before the check (a symlink cannot smuggle a path out) |
 | `read_file` | Read a workspace file (20k chars) | Secret/DB paths denied |
 | `write_note` | Save a note to memory | — |
-| `edit_file` | Exact old→new replacement, `.bak` backup first | Workspace-confined |
-| `create_file` | Create a NEW file (refuses if it exists) | Workspace-confined, 100KB cap |
-| `search_files` | Content search in the workspace | Skips node_modules/.git/data, 500 files / 20 matches |
+| `edit_file` | Exact old→new replacement, `.bak` backup first | Workspace-confined; **writes under `app/` refused** (cycle 5, H-4) |
+| `create_file` | Create a NEW file (refuses if it exists) | Workspace-confined, 100KB cap; **writes under `app/` refused** (cycle 5, H-4) |
+| `search_files` | Content search in the workspace | Skips node_modules/.git/data, 500 files / 20 matches; **secret/credential files skipped, excerpts redacted** (cycle 5, H-1) |
 | `search_notes` | Search saved notes | — |
 | `web_fetch` | Fetch an https page, text only (5k chars) | Public URLs only, no private IPs, every redirect hop re-validated (max 3) |
 | `create_approval` | Record a DRAFT approval request (action + exact details) | Draft only — approving never executes; a human sends/posts/spends |
 | `file_info` | Metadata for one file/dir: type, size, modified, line count | Read-only, no contents, secret paths denied |
-| `append_file` | Append 1..10KB to an EXISTING file | Workspace-confined; refuses new files (use `create_file`) |
+| `append_file` | Append 1..10KB to an EXISTING file | Workspace-confined; refuses new files (use `create_file`); **writes under `app/` refused** (cycle 5, H-4) |
 | `recent_activity` | Last 1..20 audit-log rows, newest first | Read-only, args/results truncated; local-only log |
-| `run_command` | One of 7 read-only commands | Exact argv, `execFile`, no shell |
-| `run_tests` | Run the full test suite on port 3199, return pass/fail | One run at a time; required before claiming a self-modification works |
+| `remember_fact` | Store a timestamped fact in long-term memory (scope + optional topic + source) | Same scope+topic with different content supersedes the old fact (history kept); identical content is a no-op. Audit records metadata only, never fact content. |
+| `recall_memory` | Recall facts by keyword, one scope only | Returns facts with citations (id, scope, topic, source, date) + superseded history. FTS5 keyword recall — no synonym/paraphrase understanding. |
+| `forget_fact` | PERMANENTLY delete a fact (by id or by topic), one scope | Hard delete — a forgotten fact cannot be recalled again. By topic removes all versions. |
+| `edit_fact` | Correct a current fact | Old wording kept as superseded history; recall returns the corrected fact. Only current facts editable. |
+| `run_command` | One of 6 read-only commands | Exact argv, `execFile`, no shell. `npm test` was removed from the allowlist (cycle 2): it ran whatever `package.json` defines and failed live tests misleadingly without a server — use the `run_tests` tool. |
+| `run_tests` | Run the full test suite on port 3199, return pass/fail | One run at a time; a health check — **not** a self-modification gate (the agent cannot edit app code since cycle 5, H-4) |
 | `notify` | Leave a notification in the local inbox | Local only, never sent anywhere |
 | `screenshot` | Capture the desktop, store in the replay log | Needs desktop agent or local display |
 | `screen_act` | One screen action (see §3) | Validated twice (server + agent); destructive needs approved approval id |
@@ -86,7 +90,25 @@ element bounds), `type` (sensitive refused). iOS: messaging +
 Shortcuts only — Apple allows no general screen control, and the
 product says so instead of implying otherwise.
 
-## 6. Deliberately left out — and why
+## 6. Audit chain, receipts, and the eval harness (cycle 2)
+
+Every tool call — allowed or denied — is written to `audit_log` with a
+hash chain: each entry's `entry_hash` covers the previous entry's hash
+plus the entry contents, so editing a historical entry breaks
+verification (`GET /api/audit/verify`). Rows written before chaining
+have NULL hashes and are counted as legacy, not treated as tamper. The
+chain is tamper-evident, not tamper-proof: anyone with write access to
+the SQLite file could recompute it. Run receipts (`GET
+/api/audit/receipt?run_id=…`, JSON or `format=md`) state only what the
+log shows: what was done, what was denied, and whether the chain
+verifies. The eval harness (`eval-tasks.js`, `eval-runner.js`,
+`scripts/run-eval.js`) runs 18 deterministic golden tasks against the
+real executor — no model, no network, throwaway workspace + database —
+and reports pass/fail per task plus determinism across repetitions
+(3 memory tasks added in cycle 4: remember/recall with citations,
+contradiction supersession, forget).
+
+## 7. Deliberately left out — and why
 
 | Left out | Why |
 |---|---|
@@ -98,7 +120,8 @@ product says so instead of implying otherwise.
 | Account creation | Needs the user's own attestations and credentials. |
 | File upload in the browser | Could exfiltrate local files. No upload action exists. |
 | Page JavaScript execution (`javascript_exec`) | Arbitrary code in page context breaks the deny-first model. Element refs + typed actions cover the safe cases. |
-| Arbitrary shell commands | `run_command` is 7 exact read-only commands. A shell escape hatch (Open Interpreter / Codex style) is the single biggest blast radius in an agent; we do not ship one. |
+| Arbitrary shell commands | `run_command` is 6 exact read-only commands. A shell escape hatch (Open Interpreter / Codex style) is the single biggest blast radius in an agent; we do not ship one. |
+| Agent self-modification (writing app code) | Removed in cycle 5 (audit H-4, 18 Nov 2026). Tool writes to `app/`, the skills manifest, and git hooks are refused in code: `run_tests` executes the test script, so write access to it would be arbitrary code execution, and a frontend overwrite would enable stored XSS + token theft. The agent proposes changes; the human applies them; the agent verifies with `run_tests`. See `CUSTOMIZE.md`. |
 | Bulk / mass messaging | No bulk capability exists anywhere. One configured chat, one reply at a time. |
 | CAPTCHA solving / bot-check bypass | Against the sites' terms and the product's own rules. The agent stops and hands control to the user. |
 | Hosted cloud browsers / stealth / proxies | Paid services; conflicts with the $0 + no-credential rules. |
@@ -110,7 +133,7 @@ product says so instead of implying otherwise.
 | Clipboard history / clipboard sync | The clipboard can hold passwords. Read/write only, capped, never stored or synced. |
 | `hold_key`, `cursor_position`, triple-click | In Anthropic's set; no measured need yet. Add only with a real use + tests. |
 
-## 7. Evidence note — small local models and tool use
+## 8. Evidence note — small local models and tool use
 
 Fast routing deliberately never sends vision grounding or multi-step
 planning to a small local model. The evidence: a measured pipeline

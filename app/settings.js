@@ -48,6 +48,11 @@ function validateValue(name, value) {
     case 'secret': {
       if (value.length < 8 || value.length > 500) throw new Error(`${name} must be 8..500 characters`);
       if (/\s/.test(value) || /['"`]/.test(value)) throw new Error(`${name} must not contain whitespace or quotes`);
+      // M-7: reject shell metacharacters. .env.local is a data file, but
+      // a value containing `;`, `|`, `&`, `$`, backtick, `()`, or `<>`
+      // would execute if the file were ever sourced by a shell script.
+      // Real API keys/tokens never contain these characters.
+      if (/[;|&$`\\()<>]/.test(value)) throw new Error(`${name} must not contain shell characters (; | & $ \` ( ) < >)`);
       return value;
     }
     case 'url': {
@@ -260,9 +265,29 @@ function getOrder() {
   return brain.resolveOrder();
 }
 
+// H-5: the CONFIGURED order — BRAIN_PROVIDERS exactly as saved (or the
+// default order when unset), including providers with no key yet. The
+// Settings UI edits this; getOrder() (the resolved chain) is display
+// only. Names are returned as saved (e.g. 'gemini', not the normalised
+// 'gemini-direct') so a save round-trips byte-for-byte; unknown names
+// are dropped, duplicates collapsed, and an empty result falls back to
+// the default order.
+function getConfiguredOrder() {
+  const raw = String(process.env.BRAIN_PROVIDERS || '').trim();
+  const names = raw ? raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : ['gemini', 'groq', 'ollama'];
+  const seen = new Set();
+  const out = [];
+  for (const n of names) {
+    if (!ORDER_NAMES.has(n) || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out.length ? out : ['gemini', 'groq', 'ollama'];
+}
+
 module.exports = {
   ENV_PATH, SETTING_VARS, PROVIDER_META, ORDER_NAMES,
   validateValue, parseEnvText, readEnvFile, writeEnvUpdates,
-  getProviderStatus, getChannelStatus, getOrder,
+  getProviderStatus, getChannelStatus, getOrder, getConfiguredOrder,
   getLastTest, recordTestResult,
 };

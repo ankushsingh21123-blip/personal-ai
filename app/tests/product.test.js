@@ -522,7 +522,7 @@ test('replay: pruneShots caps the shots dir at 200 files', () => {
 // ---------------------------------------------------------------------------
 // Tools: new allowlisted tools + run_tests gate
 // ---------------------------------------------------------------------------
-const TMP_WS_DIR = path.join(tools.WORKSPACE, 'app', 'tests', 'tmp-product');
+const TMP_WS_DIR = path.join(tools.WORKSPACE, 'tmp-product');
 test('routines: parseScheduleString accepts daily/interval strings, rejects bad ones', () => {
   const routines = require('../routines');
   assert.deepEqual(routines.parseScheduleString('09:00'), { type: 'daily', time: '09:00', weekdays: [0, 1, 2, 3, 4, 5, 6] });
@@ -541,11 +541,11 @@ test('tools: search_files finds content, skips node_modules/data, caps matches',
   fs.writeFileSync(path.join(TMP_WS_DIR, 'a.txt'), 'the needle lives here\nsecond line\n');
   fs.writeFileSync(path.join(TMP_WS_DIR, 'b.txt'), 'nothing to see\n');
   try {
-    const r = await tools.execute('search_files', { query: 'needle', path: 'app/tests/tmp-product' });
+    const r = await tools.execute('search_files', { query: 'needle', path: 'tmp-product' });
     assert.equal(r.matches.length, 1);
     assert.equal(r.matches[0].line, 1);
     assert.match(r.matches[0].excerpt, /needle/);
-    const none = await tools.execute('search_files', { query: 'zzz-no-such-string-zzz', path: 'app/tests/tmp-product' });
+    const none = await tools.execute('search_files', { query: 'zzz-no-such-string-zzz', path: 'tmp-product' });
     assert.equal(none.matches.length, 0);
     await assert.rejects(tools.execute('search_files', { query: '' }), /query/);
   } finally {
@@ -555,12 +555,12 @@ test('tools: search_files finds content, skips node_modules/data, caps matches',
 test('tools: create_file creates new files only, refuses existing + missing parents', async () => {
   fs.mkdirSync(TMP_WS_DIR, { recursive: true });
   try {
-    const r = await tools.execute('create_file', { path: 'app/tests/tmp-product/new.txt', content: 'fresh' });
+    const r = await tools.execute('create_file', { path: 'tmp-product/new.txt', content: 'fresh' });
     assert.equal(r.ok, true);
     assert.equal(fs.readFileSync(path.join(TMP_WS_DIR, 'new.txt'), 'utf8'), 'fresh');
-    await assert.rejects(tools.execute('create_file', { path: 'app/tests/tmp-product/new.txt', content: 'again' }), /already exists/);
-    await assert.rejects(tools.execute('create_file', { path: 'app/tests/tmp-product/no-dir/x.txt', content: 'x' }), /parent directory/);
-    await assert.rejects(tools.execute('create_file', { path: 'app/tests/tmp-product/evil.txt', content: 'x'.repeat(100 * 1024 + 1) }), /100KB/);
+    await assert.rejects(tools.execute('create_file', { path: 'tmp-product/new.txt', content: 'again' }), /already exists/);
+    await assert.rejects(tools.execute('create_file', { path: 'tmp-product/no-dir/x.txt', content: 'x' }), /parent directory/);
+    await assert.rejects(tools.execute('create_file', { path: 'tmp-product/evil.txt', content: 'x'.repeat(100 * 1024 + 1) }), /100KB/);
   } finally {
     fs.rmSync(TMP_WS_DIR, { recursive: true, force: true });
   }
@@ -639,7 +639,7 @@ test('whatsapp: handleIncomingMessage refuses keys, forwards normal text', async
   const sent = [];
   let forwarded = 0;
   const out = await whatsapp.handleIncomingMessage({
-    text: `key: ${FAKE_OPENAI}`, from: '123@s.whatsapp.net',
+    text: `key: ${FAKE_OPENAI}`, from: '123@s.whatsapp.net', allowedFrom: '123@s.whatsapp.net',
     onMessage: async () => { forwarded++; return 'reply'; },
     send: async (t) => { sent.push(t); },
   });
@@ -648,7 +648,7 @@ test('whatsapp: handleIncomingMessage refuses keys, forwards normal text', async
   assert.equal(sent[0], KEY_REFUSAL);
   assert.ok(!sent[0].includes(FAKE_OPENAI));
   const out2 = await whatsapp.handleIncomingMessage({
-    text: 'hello', from: '123@s.whatsapp.net',
+    text: 'hello', from: '123@s.whatsapp.net', allowedFrom: '123@s.whatsapp.net',
     onMessage: async () => { forwarded++; return 'hi back'; },
     send: async (t) => { sent.push(t); },
   });

@@ -13,9 +13,14 @@
 //   any other text — forwarded to the injected onMessage handler (the
 //     agent turn) and the reply is sent back.
 // Incoming text is DATA, never instructions: the handler runs the same
-// deny-first tools as a chat turn. Only the configured chat id may talk to
-// the bot (TELEGRAM_CHAT_ID, set after the first /start) — anyone else gets
-// no reply at all.
+// deny-first tools as a chat turn. FAIL-CLOSED (H-3, audit 18 Nov 2026):
+// until TELEGRAM_CHAT_ID is set, NO chat is answered — anyone who finds
+// the bot gets nothing, not even /start. The owner pairs the bot by
+// setting the chat id in the loopback Settings UI (or .env.local); the
+// effective id is re-read from the environment on every update, so
+// pairing takes effect without a restart. Refused chats are logged to
+// stderr (chat id only, never message text). Once set, only that chat is
+// answered — everyone else gets no reply at all.
 // KEYS ARE NEVER ACCEPTED IN CHAT: a message that looks like an API key is
 // refused before it reaches the agent turn, never stored, never forwarded.
 // The reply points at the Settings page (loopback web UI), the only place
@@ -46,11 +51,18 @@ class TelegramBot {
 
   get enabled() { return !!this.token; }
 
+  // The chat id that may talk to the bot. The constructor value wins; the
+  // environment is re-read on every call so pairing via the Settings UI
+  // (which mirrors into process.env) takes effect without a restart.
+  get effectiveChatId() {
+    return String(this.chatId || process.env.TELEGRAM_CHAT_ID || '');
+  }
+
   status() {
     return {
       enabled: this.enabled,
       running: this.running,
-      chatConfigured: !!this.chatId,
+      chatConfigured: !!this.effectiveChatId,
       reason: this.enabled ? null : 'no TELEGRAM_BOT_TOKEN in .env.local — create a bot via @BotFather, paste the token in .env.local, restart',
     };
   }
@@ -85,8 +97,19 @@ class TelegramBot {
     const msg = update?.message;
     if (!msg || typeof msg.text !== 'string') return { handled: false };
     const fromId = String(msg.chat?.id || '');
-    // Chat lock: once TELEGRAM_CHAT_ID is set, only that chat is answered.
-    if (this.chatId && fromId !== String(this.chatId)) return { handled: false, reason: 'chat not authorised' };
+    // Chat lock, fail-closed (H-3): with no chat id configured, refuse
+    // EVERYONE — including /start — and log the refused chat. With a chat
+    // id configured, only that chat is answered; others are logged and
+    // refused with no reply. Message text is never logged.
+    const allowed = this.effectiveChatId;
+    if (!allowed) {
+      console.error(`[personal-ai] telegram: refused update from chat ${fromId || '(unknown)'} — no TELEGRAM_CHAT_ID configured`);
+      return { handled: false, reason: 'telegram chat id not configured — refusing all chats until TELEGRAM_CHAT_ID is set' };
+    }
+    if (fromId !== allowed) {
+      console.error(`[personal-ai] telegram: refused update from unauthorised chat ${fromId || '(unknown)'}`);
+      return { handled: false, reason: 'chat not authorised' };
+    }
     const text = msg.text.trim();
     if (!text) return { handled: false };
 
@@ -144,6 +167,9 @@ class TelegramBot {
   start(intervalMs = 5000) {
     if (!this.enabled) throw new Error('telegram disabled: no TELEGRAM_BOT_TOKEN');
     if (this.running) return;
+    if (!this.effectiveChatId) {
+      console.error('[personal-ai] telegram bot polling WITHOUT a chat id — all chats are refused until TELEGRAM_CHAT_ID is set (Settings UI or .env.local)');
+    }
     this.running = true;
     const loop = async () => {
       if (!this.running) return;

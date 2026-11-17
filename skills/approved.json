@@ -1,0 +1,35 @@
+{
+  "_note": "Human approval record for Piplet skills. A skill is ACTIVE only when its entry here has approved=true and a sha256 matching the current SKILL.md. Any edit deactivates the skill until a human re-approves it (node app/scripts/approve-skill.js <name> --by Name). The cycle-3 entries were written in the cycle-3 batch and take effect only when the repo owner approves the batch push; there is no API endpoint that can approve a skill.",
+  "skills": {
+    "coding-agent": {
+      "approved": true,
+      "approved_by": "Ankush Singh (cycle-3 batch, effective on owner push approval)",
+      "approved_at": "2026-11-17",
+      "sha256": "fe933f826f59d4d02bbd667a3b3e1567b201628f2abb9491b12dd9309840d16a"
+    },
+    "goose": {
+      "approved": true,
+      "approved_by": "Ankush Singh (cycle-3 batch, effective on owner push approval)",
+      "approved_at": "2026-11-17",
+      "sha256": "c77e78e47cb1f68409caca27c387ae1fdbe474682bc30862267bea350b8d872e"
+    },
+    "reply-mirroring": {
+      "approved": true,
+      "approved_by": "Ankush Singh (cycle-3 batch, effective on owner push approval)",
+      "approved_at": "2026-11-17",
+      "sha256": "1b156c5e019e53ee654367d4eddb3f8ca505ca1f6cba856d9050d6d349aefea3"
+    },
+    "eval-checklist": {
+      "approved": true,
+      "approved_by": "Ankush Singh (cycle-3 batch, effective on owner push approval)",
+      "approved_at": "2026-11-17",
+      "sha256": "89d8c5ea3b7444d8ecb25dc8983edfe9084deefd5bfd0a8202b87187c026fde2"
+    },
+    "safe-web-research": {
+      "approved": true,
+      "approved_by": "Ankush Singh (cycle-3 batch, effective on owner push approval)",
+      "approved_at": "2026-11-17",
+      "sha256": "27632e67cc2f3a3f9498abf042978ff7c8dfa587be25ebff52239647bf6575be"
+    }
+  }
+}

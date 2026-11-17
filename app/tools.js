@@ -8,9 +8,19 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { run, all } = require('./db');
+const { audit } = require('./audit'); // hash-chained audit writer (audit.js)
+const { redact } = require('./secrets'); // search excerpts are redacted (H-1)
 
 const WORKSPACE = process.env.WORKSPACE
   || path.join(require('os').homedir(), 'workspace', 'personal-ai');
+
+// The app's own code directory. Tool writes under it are refused (H-4):
+// a model turn must never edit the code, tests, or served frontend, or it
+// could rewrite the test script / test files and reach arbitrary code
+// execution through run_tests, or overwrite public/app.js for stored XSS
+// + token theft. Code changes are made by the user, never by the agent.
+// Reads are still allowed — the agent may read code to reason about it.
+const APP_DIR = (() => { try { return fs.realpathSync(__dirname); } catch { return path.resolve(__dirname); } })();
 
 // Files the agent may NEVER read, even if asked.
 const DENIED_PATHS = [/\.env/i, /\.ssh/i, /\.openclaw\/credentials/i, /credentials/i, /\.git\/config/i, /\.db(-shm|-wal)?$/i, /\.sqlite/i];
@@ -27,29 +37,64 @@ function safePath(rel) {
   if (fs.existsSync(resolved) && fs.lstatSync(resolved).isSymbolicLink()) {
     throw new Error('denied: symlinks are not allowed');
   }
-  let real = resolved;
-  try { real = fs.realpathSync(resolved); } catch { /* file may not exist yet */ }
-  if (real !== WORKSPACE && !real.startsWith(WORKSPACE + path.sep)) {
+  // H-2 fix (audit 18 Nov 2026): for paths that do not exist yet, realpath
+  // throws and the old fallback kept the lexical path — so a symlinked
+  // PARENT directory could smuggle a new file outside the workspace.
+  // Resolve the nearest existing ancestor instead, and require the
+  // recombined real path to stay inside the real workspace.
+  let ancestor = resolved;
+  const rest = [];
+  while (!fs.existsSync(ancestor)) {
+    rest.unshift(path.basename(ancestor));
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break; // filesystem root
+    ancestor = parent;
+  }
+  let realAncestor = ancestor;
+  try { realAncestor = fs.realpathSync(ancestor); } catch { /* keep lexical ancestor */ }
+  const real = rest.length ? path.join(realAncestor, ...rest) : realAncestor;
+  let wsReal = WORKSPACE;
+  try { wsReal = fs.realpathSync(WORKSPACE); } catch { /* workspace missing — lexical check already ran */ }
+  if (real !== wsReal && !real.startsWith(wsReal + path.sep)) {
     throw new Error('denied: path escapes workspace (symlink)');
   }
   if (DENIED_PATHS.some(re => re.test(real))) throw new Error('denied: secret/credential path');
   return real;
 }
 
-function audit(tool, args, allowed, result) {
-  try { run('INSERT INTO audit_log (tool, args, allowed, result) VALUES (?, ?, ?, ?)',
-    tool, JSON.stringify(args || {}), allowed ? 1 : 0, String(result || '').slice(0, 500)); } catch {}
+// H-4: refuse tool writes to the app's own code, the skills approval
+// manifest, and the git hooks. `p` must be a safePath() result (real path).
+// The approval manifest is a human act: letting the agent write it would
+// let it approve its own skills. The pre-push hook is a safety gate.
+function assertWritablePath(p) {
+  if (p === APP_DIR || p.startsWith(APP_DIR + path.sep)) {
+    throw new Error('denied: tool writes to the app code directory are refused — code, tests, and the served frontend are changed by the user, never by the agent');
+  }
+  let wsReal = WORKSPACE;
+  try { wsReal = fs.realpathSync(WORKSPACE); } catch { /* fall back to the lexical workspace */ }
+  const rel = path.relative(wsReal, p);
+  if (rel === path.join('skills', 'approved.json')) {
+    throw new Error('denied: the skills approval manifest is written by the user only — the agent cannot approve its own skills');
+  }
+  if (rel === '.githooks' || rel.startsWith('.githooks' + path.sep)) {
+    throw new Error('denied: git hooks are safety gates — the agent cannot write them');
+  }
 }
 
 const ALLOWED_COMMANDS = {
   // exact argv, no shell, no pipes, no substitution — execFile, never exec()
+  // NOTE (cycle 2, 17 Nov 2026): 'npm test' was REMOVED from this list.
+  // It executed whatever package.json's test script defines in WORKSPACE
+  // (flagged as L6 in the 12 Nov security audit), and it ran node --test
+  // without the live server, so live tests failed misleadingly. The
+  // sanctioned path is the run_tests tool, which runs tests/run-tests.sh
+  // on its own port and parses the real pass/fail counts.
   date: ['date'],
   pwd: ['pwd'],
   'node --version': ['node', '--version'],
   'git status': ['git', 'status', '--short'],
   'git diff --stat': ['git', 'diff', '--stat'],
   uptime: ['uptime'],
-  'npm test': ['npm', 'test'],
 };
 
 function runCommand(name) {
@@ -63,11 +108,17 @@ function runCommand(name) {
   });
 }
 
-// run_tests — the self-modification gate. Runs tests/run-tests.sh on a
-// separate port (PORT=3199, so it never clashes with the live server on
-// 3100), parses the node --test summary, and returns pass/fail counts.
-// One run at a time (module-level guard). The runner is injectable for
-// unit tests via setTestRunner — the default runs the real script.
+// run_tests — runs tests/run-tests.sh on a separate port (PORT=3199, so it
+// never clashes with the live server on 3100), parses the node --test
+// summary, and returns pass/fail counts. One run at a time (module-level
+// guard). The runner is injectable for unit tests via setTestRunner — the
+// default runs the real script.
+// H-4 note (audit 18 Nov 2026): run_tests executes a shell script, so it
+// is only safe because tool writes to the app directory are refused
+// (assertWritablePath) — a model turn cannot rewrite the script or the
+// test files it runs. Tampering would require direct file access by a
+// human, which is the trust boundary. The script itself never sources
+// .env.local (see scripts/load-env.sh) so a crafted value cannot execute.
 let testsRunning = false;
 let testRunnerOverride = null;
 function setTestRunner(fn) { testRunnerOverride = fn; }
@@ -141,6 +192,12 @@ async function execute(tool, args = {}) {
       // Content search inside the workspace. JS walk, no shell, no ripgrep
       // dependency: skips node_modules/.git/data, symlinks, and large or
       // binary files. Capped: 500 files walked, 20 matches returned.
+      // H-1 fix (audit 18 Nov 2026): the walk used to read files directly
+      // and never applied DENIED_PATHS, so key lines from app/.env.local
+      // came back as excerpts. Every file is now checked against the
+      // deny list before it is opened, .env* files are skipped outright,
+      // and excerpts are redacted — a key-shaped line can never leak
+      // through a search result.
       if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 200) throw new Error('search_files needs a query, 1..200 chars');
       const root = safePath(args.path || '.');
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error('search path is not a directory');
@@ -156,6 +213,9 @@ async function execute(tool, args = {}) {
           if (walked >= 500 || matches.length >= 20) return;
           if (e.isSymbolicLink() || SKIP.has(e.name)) continue;
           const full = path.join(dir, e.name);
+          // Deny-list applies to every file the walk would open, by name
+          // and by full path — secret/credential files are never read.
+          if (DENIED_PATHS.some(re => re.test(e.name) || re.test(full))) continue;
           if (e.isDirectory()) { walk(full); continue; }
           if (!e.isFile()) continue;
           walked++;
@@ -168,7 +228,7 @@ async function execute(tool, args = {}) {
           const lines = content.split('\n');
           for (let i = 0; i < lines.length && matches.length < 20; i++) {
             if (lines[i].toLowerCase().includes(q)) {
-              matches.push({ path: path.relative(WORKSPACE, full), line: i + 1, excerpt: lines[i].trim().slice(0, 200) });
+              matches.push({ path: path.relative(WORKSPACE, full), line: i + 1, excerpt: redact(lines[i].trim().slice(0, 200)) });
             }
           }
         }
@@ -183,6 +243,7 @@ async function execute(tool, args = {}) {
       if (!args.path || typeof args.content !== 'string') throw new Error('path and content required');
       if (args.content.length > 100 * 1024) throw new Error('create_file content capped at 100KB');
       const p = safePath(args.path);
+      assertWritablePath(p); // H-4: never write app code, the skills manifest, or git hooks
       if (fs.existsSync(p)) throw new Error('file already exists — use edit_file to change it');
       const parent = path.dirname(p);
       if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) throw new Error('parent directory does not exist');
@@ -295,6 +356,44 @@ async function execute(tool, args = {}) {
       audit(tool, args, r.ok, `tests pass=${r.pass} fail=${r.fail}`);
       return r;
     }
+    case 'remember_fact': {
+      // Memory v2: store a timestamped fact (scope + optional topic +
+      // source). Same scope+topic with different content supersedes the
+      // old fact (history kept); identical content is a no-op. Audit
+      // records metadata only — fact content is never written to the log.
+      const memory = require('./memory');
+      const r = memory.remember({ scope: args.scope, topic: args.topic, content: args.content, source: args.source || 'tool:remember_fact', runId: args.run_id });
+      audit(tool, { scope: args.scope || 'default', topic: args.topic || '' }, true, `fact ${r.id}${r.duplicate ? ' (duplicate)' : ''}${r.superseded.length ? ` superseded ${r.superseded.join(',')}` : ''}`);
+      return { ok: true, fact_id: r.id, duplicate: r.duplicate, superseded: r.superseded };
+    }
+    case 'recall_memory': {
+      // Memory v2: keyword recall (FTS5 + recency + exact-topic boost)
+      // within one scope only. Every fact carries its citation (id,
+      // scope, topic, source, date) plus superseded history for the
+      // same topic. Never returns facts from another scope.
+      const memory = require('./memory');
+      const r = memory.recall({ scope: args.scope, query: args.query, limit: args.limit });
+      audit(tool, { scope: r.scope, query: String(args.query || '').slice(0, 100) }, true, `${r.facts.length} facts`);
+      return { ok: true, facts: r.facts, scope: r.scope };
+    }
+    case 'forget_fact': {
+      // Memory v2: PERMANENT delete — by id or by topic, within one
+      // scope. A forgotten fact cannot be recalled again. Audit records
+      // the id/topic only, never the deleted content.
+      const memory = require('./memory');
+      const r = memory.forget({ scope: args.scope, id: args.id, topic: args.topic });
+      audit(tool, { scope: args.scope || 'default', id: args.id || null, topic: args.topic || null }, true, `forgot ${r.forgotten}`);
+      return { ok: true, forgotten: r.forgotten, id: r.id || null, topic: r.topic || null };
+    }
+    case 'edit_fact': {
+      // Memory v2: correct a current fact. The old wording is kept as
+      // superseded history; recall returns the corrected fact. Audit
+      // records ids only — neither wording is written to the log.
+      const memory = require('./memory');
+      const r = memory.editFact({ scope: args.scope, id: args.id, content: args.content, topic: args.topic });
+      audit(tool, { scope: args.scope || 'default', id: args.id }, true, `fact ${args.id} -> ${r.id}${r.unchanged ? ' (unchanged)' : ''}`);
+      return { ok: true, fact_id: r.id, previous_id: r.previous_id, unchanged: r.unchanged };
+    }
     case 'list_files': {
       const dir = safePath(args.path || '.');
       const items = fs.readdirSync(dir, { withFileTypes: true })
@@ -320,6 +419,7 @@ async function execute(tool, args = {}) {
       // Precise old->new replacement, with a .bak backup first. Workspace only.
       if (!args.path || typeof args.old_text !== 'string' || typeof args.new_text !== 'string') throw new Error('path, old_text and new_text required');
       const p = safePath(args.path);
+      assertWritablePath(p); // H-4: never write app code, the skills manifest, or git hooks
       if (!fs.existsSync(p) || !fs.statSync(p).isFile()) throw new Error('file not found');
       const before = fs.readFileSync(p, 'utf8');
       if (!before.includes(args.old_text)) throw new Error('old_text not found exactly — no fuzzy edits');
@@ -370,6 +470,7 @@ async function execute(tool, args = {}) {
       if (!args.path || typeof args.content !== 'string') throw new Error('path and content required');
       if (!args.content.length || args.content.length > 10 * 1024) throw new Error('append_file content must be 1..10240 chars');
       const p = safePath(args.path);
+      assertWritablePath(p); // H-4: never write app code, the skills manifest, or git hooks
       if (!fs.existsSync(p) || !fs.statSync(p).isFile()) throw new Error('file not found — use create_file for new files');
       fs.appendFileSync(p, args.content, 'utf8');
       audit(tool, { path: args.path }, true, `appended ${args.content.length} chars to ${args.path}`);
@@ -381,8 +482,8 @@ async function execute(tool, args = {}) {
       // already did before acting again. Audit rows are local-only and
       // never synced; this tool returns metadata, never secret content.
       const limit = Math.min(Math.max(Number(args.limit || 10) || 10, 1), 20);
-      const rows = all('SELECT id, tool, args, allowed, result, created_at FROM audit_log ORDER BY id DESC LIMIT ?', limit)
-        .map(r => ({ id: r.id, tool: r.tool, args: String(r.args || '').slice(0, 200), allowed: r.allowed, result: String(r.result || '').slice(0, 200), created_at: r.created_at }));
+      const rows = all('SELECT id, tool, args, allowed, result, created_at, entry_hash, run_id FROM audit_log ORDER BY id DESC LIMIT ?', limit)
+        .map(r => ({ id: r.id, tool: r.tool, args: String(r.args || '').slice(0, 200), allowed: r.allowed, result: String(r.result || '').slice(0, 200), created_at: r.created_at, hash: r.entry_hash ? r.entry_hash.slice(0, 12) : null, run_id: r.run_id || null }));
       audit(tool, args, true, `${rows.length} audit rows`);
       return { ok: true, activity: rows };
     }
@@ -400,4 +501,4 @@ async function execute(tool, args = {}) {
   }
 }
 
-module.exports = { execute, safePath, WORKSPACE, ALLOWED_COMMANDS, audit, runTests, setTestRunner, assertPublicHttpsUrl, fetchPublicText };
+module.exports = { execute, safePath, assertWritablePath, APP_DIR, WORKSPACE, ALLOWED_COMMANDS, audit, runTests, setTestRunner, assertPublicHttpsUrl, fetchPublicText };

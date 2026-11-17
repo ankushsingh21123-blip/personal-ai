@@ -1,15 +1,18 @@
 // Database — SQLite, real, persistent. node:sqlite (Node 22.5+, stable in Node 24).
 // Tables: messages (chat history), jobs (every agent run + evidence),
 // notes (memory), approvals (draft-first gate — nothing irreversible executes
-// without an approved record), audit_log (every tool call, allowed or denied).
+// without an approved record), audit_log (every tool call, allowed or denied),
+// memory_facts + memory_facts_fts (Memory v2: timestamped facts with
+// contradiction history, FTS5 recall — cycle 4, 18 Nov 2026).
 // Phases B–E (14 Nov 2026): outbox (durable offline queue), routines +
 // routine_runs (scheduled jobs), sync_conflicts (sync conflicts, surfaced
 // never silently overwritten), settings (key/value — freeze state, device id).
 // Sync columns: messages/jobs/notes/approvals gain device_id + updated_at
 // (added by migration below if an older DB exists) for last-write-wins sync.
-// Notifications, screen sessions/steps, settings, outbox, and audit_log
-// are NEVER synced: screenshots and keys must not leave the device, and
-// queue/audit state is local by design (see sync.js SYNC_TABLES).
+// Notifications, screen sessions/steps, settings, outbox, audit_log, and
+// memory_facts are NEVER synced: screenshots, keys, audit state, and
+// personal memory must not leave the device (see sync.js SYNC_TABLES —
+// memory_facts is deliberately absent from it).
 'use strict';
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
@@ -17,12 +20,29 @@ const path = require('path');
 
 const DATA_DIR = path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const DB_PATH = path.join(DATA_DIR, 'personal-ai.db');
+// PIPLET_DB_PATH lets the eval harness (scripts/run-eval.js) and other
+// throwaway runs use a temporary database instead of the real one. Default
+// is unchanged: the persistent DB in data/. Never point this at a shared
+// or synced location — audit/settings rows must stay on this device.
+const DB_PATH = process.env.PIPLET_DB_PATH || path.join(DATA_DIR, 'personal-ai.db');
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
+// H-16: busy_timeout 1000 ms by default (was a hard-coded 5000).
+// node:sqlite is synchronous, so a contended write blocks the whole
+// event loop for the full timeout — 5 s of frozen server per lock. 1 s
+// still absorbs normal contention (server + one helper process) while
+// bounding the freeze. WAL mode keeps readers unblocked; writers
+// serialize briefly. PIPLET_BUSY_TIMEOUT_MS overrides it: the test
+// runner sets 5000 because it deliberately runs 8 processes against
+// one DB file, a contention level the running server never sees.
+const BUSY_TIMEOUT_MS = (() => {
+  const n = Number(process.env.PIPLET_BUSY_TIMEOUT_MS || 1000);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1000;
+})();
 db.exec(`
   PRAGMA journal_mode = WAL;
-  PRAGMA busy_timeout = 5000;
+  PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; 
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     role TEXT NOT NULL, content TEXT NOT NULL,
@@ -49,7 +69,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tool TEXT NOT NULL, args TEXT, allowed INTEGER NOT NULL,
-    result TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    result TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    prev_hash TEXT, entry_hash TEXT, run_id TEXT
   );
   CREATE TABLE IF NOT EXISTS outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +134,49 @@ db.exec(`
     latency_ms INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  -- Memory v2 (cycle 4, 18 Nov 2026): timestamped facts with scope,
+  -- topic, source, and contradiction history. status 'current' means the
+  -- fact stands; 'superseded' means a newer fact with the same scope+topic
+  -- replaced it — the old row is KEPT (history), never silently
+  -- overwritten. Forget is a hard DELETE (see memory.js). The FTS5 table
+  -- is an external-content index over memory_facts, kept in sync by
+  -- triggers; recall filters to status='current', so superseded facts
+  -- never surface as answers (they surface only as history).
+  CREATE TABLE IF NOT EXISTS memory_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL DEFAULT 'default',
+    topic TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    run_id TEXT,
+    status TEXT NOT NULL DEFAULT 'current',
+    superseded_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(content, topic, content='memory_facts', content_rowid='id');
+  CREATE TRIGGER IF NOT EXISTS memory_facts_fts_ai AFTER INSERT ON memory_facts BEGIN
+    INSERT INTO memory_facts_fts(rowid, content, topic) VALUES (new.id, new.content, new.topic);
+  END;
+  CREATE TRIGGER IF NOT EXISTS memory_facts_fts_ad AFTER DELETE ON memory_facts BEGIN
+    INSERT INTO memory_facts_fts(memory_facts_fts, rowid, content, topic) VALUES ('delete', old.id, old.content, old.topic);
+  END;
+  CREATE TRIGGER IF NOT EXISTS memory_facts_fts_au AFTER UPDATE ON memory_facts BEGIN
+    INSERT INTO memory_facts_fts(memory_facts_fts, rowid, content, topic) VALUES ('delete', old.id, old.content, old.topic);
+    INSERT INTO memory_facts_fts(rowid, content, topic) VALUES (new.id, new.content, new.topic);
+  END;
 `);
+
+// Migration: hash-chain columns on audit_log (cycle 2, 17 Nov 2026).
+// Rows written before this change have NULL hashes and are reported as
+// "unchained (legacy)" by verification — they are not retroactively
+// chained, and their presence is not a tamper signal.
+{
+  const cols = db.prepare('PRAGMA table_info(audit_log)').all().map(c => c.name);
+  for (const col of ['prev_hash', 'entry_hash', 'run_id']) {
+    if (!cols.includes(col)) db.exec(`ALTER TABLE audit_log ADD COLUMN ${col} TEXT`);
+  }
+}
 
 // Migration: sync columns on the pre-existing tables. ALTER TABLE fails if
 // the column already exists, so check PRAGMA first — safe to run every start.

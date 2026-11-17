@@ -2,7 +2,7 @@
 //   frontend (public/) + backend (this file) + SQLite database (db.js)
 //   + brain (brain.js: configurable provider chain — default Gemini -> Groq
 //     -> Ollama; OpenAI / Anthropic optional via keys in .env.local) + tools (tools.js)
-//   + OpenClaw gateway + goose coding agent (wired in /api/status, skills/goose.md)
+//   + OpenClaw gateway + goose coding agent (wired in /api/status, skills/goose/SKILL.md)
 // Security (see SECURITY.md / scripts/security-check.sh for the test report):
 //   - binds 127.0.0.1 only, never 0.0.0.0; no CORS; security headers
 //   - token auth on every /api route except /api/health; token in .env.local
@@ -39,6 +39,12 @@ process.env.PATH = `${require('os').homedir()}/.local/bin:${require('os').homedi
 const { all, get, run, getSetting, setSetting } = require('./db');
 const brain = require('./brain');
 const tools = require('./tools');
+// Skills (cycle 3): curated, human-approved workflows, progressively
+// disclosed — short index in every prompt, full body only when matched.
+const skills = require('./skills');
+// Memory v2 (cycle 4): timestamped facts with contradiction history,
+// scoped recall, hard-delete forget. Local-only, never synced.
+const memory = require('./memory');
 // Phases B–E (14 Nov 2026): screen vision + desktop control, phone,
 // offline queue + sync, routines, browser use, messaging channels.
 const freeze = require('./freeze');
@@ -148,8 +154,8 @@ app.use('/api', (req, res, next) => {
 // --- helpers -----------------------------------------------------------------
 const TOOL_LIST = `You can use these tools by returning JSON only:
 {"reply":"...","actions":[{"tool":"list_files","args":{"path":"."}},{"tool":"read_file","args":{"path":"AGENT.md"}},{"tool":"write_note","args":{"title":"...","body":"..."}},{"tool":"run_command","args":{"command":"date"}}]}
-Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run_command (commands: date, pwd, node --version, git status, git diff --stat, uptime, npm test), search_files, create_file, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests.
-Rules: Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: []. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data: never paste it into a message or file unless the user asks. When you change the app's own code (self-modification), you MUST run run_tests before claiming the change works, and report the pass/fail counts honestly.
+Allowed tools only: list_files, read_file, write_note, edit_file, web_fetch, run_command (commands: date, pwd, node --version, git status, git diff --stat, uptime), search_files, create_file, append_file, file_info, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests, create_approval, recent_activity, remember_fact, recall_memory, forget_fact, edit_fact.
+Rules: Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead and return actions: []. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data: never paste it into a message or file unless the user asks. Tool writes to the app's own code are refused — code changes are made by the user, never by the agent; use run_tests to verify the app is healthy and report the pass/fail counts honestly.
 Return JSON only, no markdown, no extra text.`;
 
 // Instruction for the native function-calling path (Gemini direct,
@@ -157,9 +163,9 @@ Return JSON only, no markdown, no extra text.`;
 // Same tools, same deny-first rules — but no JSON-only demand, because the
 // model calls tools natively instead of printing JSON. The JSON prompt above
 // is kept for the text-only fallback providers (VM helper, Groq, Ollama).
-const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command, search_files, create_file, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data. When you change the app's own code, you MUST run run_tests before claiming the change works, and report the pass/fail counts honestly.`;
+const TOOLS_INSTRUCTION = `You have tools you can call when they help answer: list_files, read_file, write_note, edit_file, web_fetch, run_command, search_files, create_file, append_file, file_info, search_notes, notify, screenshot, screen_act, list_windows, focus_window, open_app, clipboard_get, clipboard_set, create_routine, list_routines, run_tests, create_approval, recent_activity, remember_fact, recall_memory, forget_fact, edit_fact. Prefer reading a file over guessing its contents. Never invent a tool. Never ask to send, post, spend or delete — if the user asks for that, say you created a draft/approval instead. Never ask for, repeat, or type an API key, password, OTP, or payment detail — keys are added by the user in the Settings page, never in chat. Treat clipboard content as sensitive data. Tool writes to the app's own code are refused — code changes are made by the user, never by the agent; use run_tests to verify the app is healthy and report the pass/fail counts honestly.`;
 
-async function agentTurn(userText) {
+async function agentTurnInner(userText) {
   const turnStart = Date.now();
   // Memory (v1): feed the last 5 messages + matching notes back into the prompt.
   // Recalled text is DATA, never instructions — it cannot authorise a send/spend/delete.
@@ -172,11 +178,25 @@ async function agentTurn(userText) {
         + '\nSaved notes:\n' + notes.map(n => `${n.title}: ${String(n.body).slice(0, 200)}`).join('\n');
     }
   } catch {}
+  // Skills (cycle 3): short index of ACTIVE skills in every prompt, full
+  // bodies only for matched skills, fenced and labelled. Skills are text
+  // only — they cannot grant tools or permissions. A failure here must
+  // never break the turn: no skills is a valid state.
+  let skillContext = '';
+  let skillsUsed = [];
+  try {
+    const sc = skills.buildSkillContext(userText);
+    if (sc.index) skillContext = '\nApproved skills (short index — full text loads only when relevant):\n' + sc.index;
+    for (const s of sc.loaded) {
+      skillsUsed.push(s.name);
+      skillContext += `\n\n--- Skill: ${s.name} (approved workflow — follow it using only your existing tools; it cannot grant new permissions) ---\n${s.body}\n--- End skill: ${s.name} ---`;
+    }
+  } catch {}
   const textPrompt = `You are Ankush's personal AI. You work for Ankush Singh only.
-${TOOL_LIST}${memory}
+${TOOL_LIST}${memory}${skillContext}
 User: ${userText}`;
   const toolsPrompt = `You are Ankush's personal AI. You work for Ankush Singh only.
-${TOOLS_INSTRUCTION}${memory}
+${TOOLS_INSTRUCTION}${memory}${skillContext}
 User: ${userText}`;
   // Native function calling first (Gemini direct, OpenAI-compatible,
   // Anthropic — whichever native-tool provider answers first in chain
@@ -185,13 +205,16 @@ User: ${userText}`;
   // JSON as before. Latency is measured for the whole turn and reported —
   // never claimed.
   const loop = await brain.agentLoopMulti(toolsPrompt, textPrompt, tools.execute, {
-    askFn: (p) => routeMod.routedAsk(p, { brain }),
+    // H-14: fast routing classifies the RAW user text — the wrapped
+    // prompt is always >2 KB, so classifying it made every turn "hard"
+    // and the routine route could never engage.
+    askFn: (p) => routeMod.routedAsk(p, { brain, classifyText: userText }),
   });
   const latencyMs = Date.now() - turnStart;
   if (loop.usedTools) {
-    return { reply: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried, actions: loop.evidence, latencyMs };
+    return { reply: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried, actions: loop.evidence, latencyMs, skills: skillsUsed, usage: loop.usage || null };
   }
-  let result = { text: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried };
+  let result = { text: loop.text, model: loop.model, provider: loop.provider, tried: loop.tried, usage: loop.usage || null };
   let reply = result.text;
   let actions = [];
   const routeInfo = { route: loop.route, fellBack: loop.fellBack };
@@ -216,26 +239,85 @@ User: ${userText}`;
   const evidence = settled.map((s, i) => s.status === 'fulfilled'
     ? { tool: actions[i].tool, ok: true, result: JSON.stringify(s.value).slice(0, 2000) }
     : { tool: actions[i].tool, ok: false, error: String(s.reason?.message || s.reason).slice(0, 300) });
-  return { reply, model: result.model, provider: result.provider, tried: result.tried, actions: evidence, route: routeInfo.route, fellBack: routeInfo.fellBack, latencyMs: Date.now() - turnStart };
+  return { reply, model: result.model, provider: result.provider, tried: result.tried, actions: evidence, route: routeInfo.route, fellBack: routeInfo.fellBack, latencyMs: Date.now() - turnStart, skills: skillsUsed, usage: result.usage || null };
+}
+
+// Turn budget (H-11): TURN_BUDGET_MS bounds a whole agent turn. Default
+// 240 s — under Node's 300 s request timeout, so the HTTP response is
+// never dropped while work continues holding a slot. Clamped 30..290 s.
+function turnBudgetMs() {
+  const n = Number(process.env.TURN_BUDGET_MS || 240000);
+  if (!Number.isFinite(n)) return 240000;
+  return Math.min(Math.max(Math.floor(n), 30000), 290000);
+}
+
+// agentTurn — the single entry point for every agent turn (chat,
+// Telegram, routines, queue). Three guards live here so no caller can
+// bypass them:
+//   M-1 freeze: a frozen agent refuses the turn outright (423 on chat).
+//   M-19 cap: at most 2 turns at once, shared by ALL callers — the old
+//     cap lived only on /api/chat, so Telegram/routines/queue bypassed it.
+//   H-11 budget: the whole turn races a deadline; on timeout the caller
+//     gets an honest 504 and the turn slot is freed (the underlying
+//     provider calls end on their own 60 s timeouts).
+// Errors carry .code ('TURNS_BUSY' / 'TURN_BUDGET') so HTTP callers can
+// map them to 429 / 504; the freeze error message starts with 'frozen:'.
+let turnsInFlight = 0;
+async function agentTurn(userText) {
+  freeze.assertNotFrozen();
+  if (turnsInFlight >= 2) {
+    const e = new Error('busy: 2 agent turns already running, try again in a moment');
+    e.code = 'TURNS_BUSY';
+    throw e;
+  }
+  turnsInFlight++;
+  try {
+    return await brain.withDeadline(agentTurnInner(userText), turnBudgetMs(), 'chat turn');
+  } catch (e) {
+    if (/exceeded its budget/.test(e.message)) e.code = 'TURN_BUDGET';
+    throw e;
+  } finally {
+    turnsInFlight--;
+  }
 }
 
 // --- routes ------------------------------------------------------------------
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'ankush-personal-ai', version: '1.0.0' }));
 
-app.get('/api/status', async (req, res) => {
-  const ollama = await brain.ollamaReachable();
-  let openclaw = false, goose = '';
-  try {
-    const r = await fetch('http://127.0.0.1:18789/', { signal: AbortSignal.timeout(3000) });
-    openclaw = r.ok;
-  } catch {}
+// H-12: /api/status used to re-run `goose --version` (6.2 s) sequentially
+// on every call, after a sequential Ollama + OpenClaw check. The goose
+// version never changes while the server runs, so it is resolved once
+// and cached for the process lifetime; the Ollama model list is cached
+// for 30 s; all three checks run in parallel. A failed check resolves
+// to its "not found" value — status must never fail because a probe did.
+let gooseVersionCache = null;
+async function getGooseVersion() {
+  if (gooseVersionCache !== null) return gooseVersionCache;
   try {
     const { execFile } = require('child_process');
     const os = require('os');
     const gooseBin = fs.existsSync(path.join(os.homedir(), '.local/bin/goose')) ? path.join(os.homedir(), '.local/bin/goose') : 'goose';
-    goose = await new Promise(resolve => execFile(gooseBin, ['--version'], { timeout: 10000 },
+    gooseVersionCache = await new Promise(resolve => execFile(gooseBin, ['--version'], { timeout: 10000 },
       (e, out) => resolve(e ? '' : String(out).trim())));
-  } catch {}
+  } catch { gooseVersionCache = ''; }
+  return gooseVersionCache;
+}
+let ollamaCache = { at: 0, value: false };
+async function cachedOllamaReachable() {
+  if (Date.now() - ollamaCache.at < 30000) return ollamaCache.value;
+  const v = await brain.ollamaReachable();
+  ollamaCache = { at: Date.now(), value: v };
+  return v;
+}
+async function checkOpenClaw() {
+  try {
+    const r = await fetch('http://127.0.0.1:18789/', { signal: AbortSignal.timeout(3000) });
+    return r.ok;
+  } catch { return false; }
+}
+
+app.get('/api/status', async (req, res) => {
+  const [ollama, openclaw, goose] = await Promise.all([cachedOllamaReachable(), checkOpenClaw(), getGooseVersion()]);
   res.json({
     ok: true,
     // brain_order is the resolved chain for the next turn: BRAIN_PROVIDERS
@@ -282,27 +364,27 @@ app.get('/api/status', async (req, res) => {
   });
 });
 
-let chatInFlight = 0;
 app.post('/api/chat', async (req, res) => {
   const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
   if (!text || text.length > 4000) return res.status(400).json({ ok: false, error: 'text required, max 4000 chars' });
-  // Concurrency cap (audit M5): at most 2 agent turns at once — a brain turn
-  // can take minutes on a slow local model and burn free-tier quota.
-  if (chatInFlight >= 2) return res.status(429).json({ ok: false, error: 'busy: 2 agent turns already running, try again in a moment' });
-  chatInFlight++;
+  // The 2-turn concurrency cap lives in agentTurn (M-19) so chat,
+  // Telegram, routines and the queue share it; the turn budget (H-11)
+  // and freeze gate (M-1) live there too. This route only maps the
+  // guard errors to honest HTTP statuses.
   try {
     run('INSERT INTO messages (role, content) VALUES (?, ?)', 'user', text);
     const turn = await agentTurn(text);
     run('INSERT INTO messages (role, content, model, provider) VALUES (?, ?, ?, ?)', 'assistant', turn.reply, turn.model, turn.provider);
     const job = run('INSERT INTO jobs (task, status, model, provider, evidence) VALUES (?, ?, ?, ?, ?)',
-      text.slice(0, 500), 'done', turn.model, turn.provider, JSON.stringify({ actions: turn.actions, latencyMs: turn.latencyMs, route: turn.route, fellBack: turn.fellBack }));
-    res.json({ ok: true, job_id: Number(job.lastInsertRowid), reply: turn.reply, model: turn.model, provider: turn.provider, tried: turn.tried, actions: turn.actions, route: turn.route, latencyMs: turn.latencyMs });
+      text.slice(0, 500), 'done', turn.model, turn.provider, JSON.stringify({ actions: turn.actions, latencyMs: turn.latencyMs, route: turn.route, fellBack: turn.fellBack, skills: turn.skills, usage: turn.usage || null }));
+    res.json({ ok: true, job_id: Number(job.lastInsertRowid), reply: turn.reply, model: turn.model, provider: turn.provider, tried: turn.tried, actions: turn.actions, route: turn.route, latencyMs: turn.latencyMs, skills: turn.skills, usage: turn.usage || null });
   } catch (e) {
     run('INSERT INTO jobs (task, status, evidence) VALUES (?, ?, ?)', text.slice(0, 500), 'failed', 'brain failed');
     console.error('[personal-ai] chat failed:', e.message);
+    if (e.code === 'TURNS_BUSY') return res.status(429).json({ ok: false, error: e.message });
+    if (e.code === 'TURN_BUDGET') return res.status(504).json({ ok: false, error: 'turn exceeded its time budget — try a shorter request' });
+    if (/^frozen:/.test(e.message)) return res.status(423).json({ ok: false, error: e.message });
     res.status(500).json({ ok: false, error: 'brain failed — try again, or check the server log' });
-  } finally {
-    chatInFlight--;
   }
 });
 
@@ -319,6 +401,9 @@ app.post('/api/brain/test', async (req, res) => {
 app.post('/api/tools', async (req, res) => {
   const { tool, args } = req.body || {};
   if (typeof tool !== 'string') return res.status(400).json({ ok: false, error: 'tool required' });
+  // M-1: freeze gates direct tool calls too — a frozen agent executes
+  // nothing, through any entry point.
+  if (freeze.isFrozen()) return res.status(423).json({ ok: false, error: 'frozen: agent stopped by user — unfreeze to resume' });
   try {
     const out = await tools.execute(tool, args || {});
     res.json({ ok: true, ...out });
@@ -342,6 +427,42 @@ app.post('/api/notes', (req, res) => {
   res.json({ ok: true, note_id: Number(r.lastInsertRowid) });
 });
 
+// Memory v2 (cycle 4): user-visible fact controls. GET lists (JSON export
+// is this endpoint), POST remembers, PUT edits, DELETE forgets (by id,
+// or by ?topic= for a whole topic). All scoped; default scope 'default'.
+// Errors from memory.js validation surface as 400 with the message.
+app.get('/api/memory', (req, res) => {
+  try {
+    const facts = memory.listFacts({ scope: req.query.scope, includeSuperseded: req.query.include_superseded === '1', limit: req.query.limit });
+    res.json({ ok: true, facts });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.post('/api/memory', (req, res) => {
+  try {
+    const r = memory.remember({ scope: req.body.scope, topic: req.body.topic, content: req.body.content, source: req.body.source || 'ui' });
+    res.json({ ok: true, fact_id: r.id, duplicate: r.duplicate, superseded: r.superseded });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.put('/api/memory/:id', (req, res) => {
+  try {
+    const r = memory.editFact({ scope: req.body.scope, id: req.params.id, content: req.body.content, topic: req.body.topic });
+    res.json({ ok: true, fact_id: r.id, previous_id: r.previous_id, unchanged: r.unchanged });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.delete('/api/memory/:id', (req, res) => {
+  try {
+    const r = memory.forget({ scope: req.query.scope, id: req.params.id });
+    res.json({ ok: true, forgotten: r.forgotten, id: r.id || null });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+app.delete('/api/memory', (req, res) => {
+  try {
+    if (!req.query.topic) return res.status(400).json({ ok: false, error: 'topic required (or DELETE /api/memory/:id)' });
+    const r = memory.forget({ scope: req.query.scope, topic: req.query.topic });
+    res.json({ ok: true, forgotten: r.forgotten, topic: r.topic });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
 app.get('/api/approvals', (req, res) => res.json({ ok: true, approvals: all('SELECT * FROM approvals ORDER BY id DESC LIMIT 50') }));
 app.post('/api/approvals', (req, res) => {
   const { action, details } = req.body || {};
@@ -361,6 +482,28 @@ app.post('/api/approvals/:id/decide', (req, res) => {
 });
 
 app.get('/api/audit', (req, res) => res.json({ ok: true, audit: all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100') }));
+
+// Skills (cycle 3): read-only list with status. Bodies are never returned
+// — the agent loads them server-side when matched. There is deliberately
+// NO write endpoint: approval is a human act in the repo (see docs/SKILLS.md).
+app.get('/api/skills', (req, res) => res.json({ ok: true, skills: skills.listSkills() }));
+
+// Hash-chain verification + run receipts (cycle 2). Both are read-only and
+// behind the same token auth as every other /api route.
+app.get('/api/audit/verify', (req, res) => {
+  const { verifyAuditChain } = require('./audit');
+  res.json({ ok: true, ...verifyAuditChain() });
+});
+app.get('/api/audit/receipt', (req, res) => {
+  const { buildReceipt, renderReceiptMarkdown } = require('./audit');
+  const receipt = buildReceipt({
+    runId: req.query.run_id || null,
+    fromId: req.query.from_id ? Number(req.query.from_id) : null,
+    toId: req.query.to_id ? Number(req.query.to_id) : null,
+  });
+  if (req.query.format === 'md') return res.type('text/markdown').send(renderReceiptMarkdown(receipt));
+  res.json({ ok: true, receipt });
+});
 
 // --- freeze: the instant stop control ---------------------------------------
 app.get('/api/freeze', (req, res) => res.json({ ok: true, ...freeze.freezeState() }));
@@ -484,6 +627,16 @@ app.post('/api/screen/act', async (req, res) => {
 app.post('/api/screen/loop', async (req, res) => {
   const task = typeof req.body?.task === 'string' ? req.body.task.trim() : '';
   if (!task || task.length > 4000) return res.status(400).json({ ok: false, error: 'task required, max 4000 chars' });
+  // M-21: max_actions is validated, not coerced. "abc"/-5 used to return
+  // a 200 zero-step "success" + a replay row; huge values ran an
+  // unbounded vision loop. Omitted = desktop default (20).
+  let maxActions;
+  if (req.body?.max_actions !== undefined && req.body?.max_actions !== null) {
+    maxActions = Number(req.body.max_actions);
+    if (!Number.isInteger(maxActions) || maxActions < 1 || maxActions > 50) {
+      return res.status(400).json({ ok: false, error: 'max_actions must be an integer 1..50' });
+    }
+  }
   const client = new desktop.DesktopAgentClient({});
   // Replay recorder: every step's observation + action is recorded locally
   // (data/shots/, git-ignored). A recorder failure never breaks the loop.
@@ -503,7 +656,7 @@ app.post('/api/screen/loop', async (req, res) => {
       },
       ground: async (t, imageBase64) => (await vision.groundAction(t, imageBase64, 'image/png')).action,
       act: (a) => client.act(a, { approvalId: req.body?.approval_id }),
-    }, { maxActions: req.body?.max_actions, approvalId: req.body?.approval_id, recorder });
+    }, { maxActions, approvalId: req.body?.approval_id, recorder });
     try { recorder?.finish(out.done ? 'done' : 'stopped'); } catch {}
     run('INSERT INTO jobs (task, status, model, provider, evidence) VALUES (?, ?, ?, ?, ?)',
       `[screen loop] ${task}`.slice(0, 500), out.done ? 'done' : 'stopped', null, null, JSON.stringify({ stopReason: out.stopReason, steps: out.steps, latencies: out.latencies, replaySessionId: recorder?.sessionId }).slice(0, 5000));
@@ -582,6 +735,11 @@ app.get('/api/settings/providers', (req, res) => res.json({
   ok: true,
   providers: settings.getProviderStatus(),
   order: settings.getOrder(),
+  // H-5: the editable order input must be pre-filled with the CONFIGURED
+  // order (what the user saved), not the resolved chain (key-holders
+  // only) — saving the resolved chain silently dropped unconfigured
+  // providers. `order` stays as the resolved chain for display.
+  configured_order: settings.getConfiguredOrder(),
   channels: settings.getChannelStatus(),
   fast_routing: routeMod.routingEnabled(),
   guide: 'docs/API-KEYS.md — where to get free keys, what each tier gives',
@@ -593,7 +751,7 @@ app.post('/api/settings/providers', (req, res) => {
   }
   try {
     const changed = settings.writeEnvUpdates(updates);
-    res.json({ ok: true, changed, providers: settings.getProviderStatus(), order: settings.getOrder(), channels: settings.getChannelStatus() });
+    res.json({ ok: true, changed, providers: settings.getProviderStatus(), order: settings.getOrder(), configured_order: settings.getConfiguredOrder(), channels: settings.getChannelStatus() });
   } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
 });
 app.post('/api/settings/order', (req, res) => {
@@ -601,7 +759,7 @@ app.post('/api/settings/order', (req, res) => {
   if (typeof order !== 'string' || !order.trim()) return res.status(400).json({ ok: false, error: 'order string required, e.g. "gemini,groq,ollama"' });
   try {
     settings.writeEnvUpdates({ BRAIN_PROVIDERS: order });
-    res.json({ ok: true, order: settings.getOrder() });
+    res.json({ ok: true, order: settings.getOrder(), configured_order: settings.getConfiguredOrder() });
   } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
 });
 app.post('/api/settings/fast-routing', (req, res) => {
@@ -699,7 +857,18 @@ app.get('/api/channels', (req, res) => res.json({
   whatsapp: whatsapp.status(),
 }));
 
-app.use((err, req, res, next) => res.status(400).json({ ok: false, error: 'bad request' }));
+app.use((err, req, res, next) => {
+  // M-24: map errors honestly instead of masking everything as 400
+  // 'bad request' with no log. Parse failures stay 400, oversized
+  // bodies are 413, a locked database is 503 (retryable), everything
+  // else is 500. The message is redacted before it is logged or sent.
+  const msg = redact(String(err?.message || 'unknown error'));
+  console.error(`[personal-ai] ${req.method} ${req.path} failed: ${msg.slice(0, 300)}`);
+  if (err?.type === 'entity.too.large') return res.status(413).json({ ok: false, error: 'request body too large' });
+  if (err instanceof SyntaxError || err?.type === 'entity.parse.failed') return res.status(400).json({ ok: false, error: 'invalid JSON body' });
+  if (/SQLITE_BUSY|database is locked/i.test(msg)) return res.status(503).json({ ok: false, error: 'database busy — try again in a moment' });
+  return res.status(500).json({ ok: false, error: 'internal error — check the server log' });
+});
 
 // --- scheduler: routines tick + outbox drain, every 60s ----------------------
 // No-ops when there are no routines and an empty outbox. Disabled with
@@ -753,4 +922,19 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`[personal-ai] listening on http://${HOST}:${PORT} (loopback only)`);
   console.log(`[personal-ai] workspace: ${tools.WORKSPACE}`);
 });
-module.exports = { app, server, agentTurn, routineRunner, defaultOutboxWorker, schedulerTimer, telegramBot };
+// H-15: a bind failure (port already in use) used to surface as an
+// unhandled error with no clear message. Fail loudly and exit non-zero
+// so a supervisor — or a human — can see the server never started, and
+// so the "listening" log above is never followed by a silent death.
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`[personal-ai] FATAL: port ${PORT} is already in use — another instance may be running. Exiting.`);
+  } else {
+    console.error(`[personal-ai] FATAL: server failed to start: ${e.message}`);
+  }
+  process.exit(1);
+});
+// Explicit request timeout: 300 s, matching the documented turn budget
+// (240 s) plus margin. Stating it beats relying on the Node default.
+server.requestTimeout = 300000;
+module.exports = { app, server, agentTurn, routineRunner, defaultOutboxWorker, schedulerTimer, telegramBot, turnBudgetMs };

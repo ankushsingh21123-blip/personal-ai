@@ -55,9 +55,15 @@ function routingEnabled() {
 // Routed ask. `brain` is the brain module (ask/askWith). Returns the ask
 // result plus route + latency. Falls back to the full chain on any local
 // failure when the route was routine.
-async function routedAsk(prompt, { brain = require('./brain'), clock = Date.now } = {}) {
+// H-14 fix (audit 18 Nov 2026): classification must run on the RAW user
+// text, not the wrapped prompt — the wrapper (tool list + memory +
+// skills) is always >2 KB, so the ">140 chars → hard" rule fired on
+// every turn and the routine route could never engage. Callers pass
+// `classifyText` (the user's own words); without it, the prompt itself
+// is classified, as before.
+async function routedAsk(prompt, { brain = require('./brain'), clock = Date.now, classifyText } = {}) {
   const t0 = clock();
-  const c = classify(prompt);
+  const c = classify(classifyText !== undefined ? classifyText : prompt);
   if (!routingEnabled() || c.route !== 'routine') {
     const r = await brain.ask(prompt);
     return { ...r, route: routingEnabled() ? 'hard' : 'default', routeReason: routingEnabled() ? c.reason : 'fast routing off', ms: clock() - t0, fellBack: false };

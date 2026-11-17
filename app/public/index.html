@@ -17,6 +17,10 @@
   </select></label> <small data-i18n="lang_note">Model replies and saved content stay in their original language.</small></p>
   <div id="status" data-i18n="status_loading">Loading status…</div>
   <p><button id="freeze-btn" data-i18n="freeze">Freeze agent</button> <span id="freeze-state"></span></p>
+  <div id="auth-banner" role="alert" hidden>
+    <span id="auth-banner-text"></span>
+    <button id="reenter-token" type="button"></button>
+  </div>
 </header>
 <main>
   <section id="chat-box">
@@ -38,10 +42,12 @@
       <input id="order-input" maxlength="200" placeholder="gemini,groq,ollama" aria-label="Provider order">
       <button type="submit" data-i18n="save_order">Save order</button>
     </form>
+    <p><small id="order-resolved"></small></p>
     <h3 data-i18n="fast_routing_title">Fast routing</h3>
     <label><input type="checkbox" id="fast-routing"> <span data-i18n="fast_routing_label">Fast routing (routine text steps try the local model first; hard work always uses the full chain — off by default)</span></label>
     <h3 data-i18n="channels_title">Channels &amp; sync</h3>
     <div id="channels"></div>
+    <p><button id="save-settings" data-i18n="save_settings">Save all settings</button> <span id="settings-result" role="status"></span></p>
   </section>
   <section>
     <h2 data-i18n="notifications_title">Notifications — things to look at when you are back</h2>
@@ -59,6 +65,20 @@
     <button id="refresh-replay" data-i18n="replay_refresh">Refresh sessions</button>
     <ul id="replay"></ul>
     <div id="replay-detail"></div>
+  </section>
+  <section>
+    <h2 data-i18n="skills_title">Skills — approved workflows, loaded only when relevant</h2>
+    <p class="hint" data-i18n="skills_hint">Skills are instruction text only — they grant no new permissions. A skill is active only after the owner reviewed and approved it; any edit deactivates it until re-approval.</p>
+    <button id="refresh-skills" data-i18n="skills_refresh">Refresh skills</button>
+    <ul id="skills"></ul>
+  </section>
+  <section>
+    <h2 data-i18n="audit_title">Audit — verify the chain &amp; run receipts</h2>
+    <p class="hint" data-i18n="audit_hint">Every audit entry is chained to the previous one. Verification shows whether the log was altered. A receipt shows only what the log shows.</p>
+    <button id="verify-audit" data-i18n="audit_verify">Verify audit chain</button>
+    <button id="show-receipt" data-i18n="audit_receipt">Show receipt (last 50 entries)</button>
+    <div id="audit-result"></div>
+    <pre id="receipt"></pre>
   </section>
   <section>
     <h2 data-i18n="jobs_title">Jobs (from the database)</h2>
@@ -98,6 +118,15 @@
       <button type="submit" data-i18n="notes_submit">Save note</button>
     </form>
     <ul id="notes"></ul>
+  </section>
+  <section>
+    <h2 data-i18n="memory_title">Memory facts</h2>
+    <form id="memory-form">
+      <input id="memory-topic" data-i18n-ph="memory_topic_ph" placeholder="Topic (optional), e.g. phone" maxlength="100" aria-label="Memory topic">
+      <input id="memory-content" data-i18n-ph="memory_content_ph" placeholder="Fact, e.g. Ankush prefers Telugu replies" maxlength="2000" aria-label="Memory fact">
+      <button type="submit" data-i18n="memory_submit">Remember</button>
+    </form>
+    <ul id="memory-facts"></ul>
   </section>
 </main>
 <script src="i18n.js"></script>

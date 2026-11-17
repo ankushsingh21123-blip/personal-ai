@@ -1,3 +1,9 @@
+---
+name: goose
+description: Use the goose coding agent for build-me-a-project jobs, with the proof template and internship rules.
+triggers: goose, build, proof template, hello-proof
+---
+
 # goose skill — how the agent uses the coding agent
 
 ## When to use goose

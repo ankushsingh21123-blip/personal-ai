@@ -7,7 +7,11 @@ FAIL=0
 check() { if [ "$1" = "0" ]; then echo "PASS: $2"; else echo "FAIL: $2"; FAIL=1; fi; }
 # All backend modules — every new module must be added here so the eval/exec
 # scans cover it. Keep this list in sync with the app folder.
-BACKEND="server.js brain.js tools.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js"
+# audit.js, db.js and memory.js are NOT listed: they use SQLite db.exec,
+# which the exec scan below cannot distinguish from a shell call. Their
+# eval() surface is covered by a dedicated check in section 4, and their
+# exec surface by the cycle-2/3/4 test suites instead.
+BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js"
 SECRET_RE='AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-or-v1-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|[0-9]{6,}:[A-Za-z0-9_-]{30,}|ANKU_TOKEN=[0-9a-f]{10,}'
 
 # 1. Secrets are git-ignored
@@ -44,6 +48,7 @@ grep -q "listen(PORT, HOST" desktop-agent.js; check $? "desktop agent listens on
 #    db.js excluded — SQLite db.exec is not a shell call)
 grep -q "cors(" server.js; [ "$?" = "1" ]; check $? "no CORS enabled"
 grep -qE '\beval\s*\(' $BACKEND; [ "$?" = "1" ]; check $? "no eval() in backend (page.evaluate is a Playwright API, not eval)"
+grep -qE '\beval\s*\(' audit.js db.js memory.js; [ "$?" = "1" ]; check $? "no eval() in audit.js/db.js/memory.js (excluded from the exec scan for SQLite db.exec)"
 grep -v '^\s*//' $BACKEND | grep -qE '\bexec\s*\('; [ "$?" = "1" ]; check $? "no child_process.exec (shell) in code — execFile/spawn only (comments/SQLite db.exec excluded)"
 grep -q "Content-Security-Policy" server.js; check $? "Content-Security-Policy header present"
 # 4b. Phase B–E gates present in code
@@ -60,6 +65,34 @@ grep -q "writeEnvUpdates" server.js; check $? "settings writes go through the va
 grep -q "settings/test.*brainRateLimit\|brainRateLimit.*settings/test" server.js; check $? "settings test endpoint is brain-rate-limited"
 grep -q "0o600" settings.js replay.js; check $? "600 permissions on .env.local writes and replay screenshots"
 grep -q "never synced\|NEVER synced" db.js sync.js server.js; check $? "never-synced tables documented (screenshots/keys stay local)"
+# 4d. Skills gates (cycle 3): no skill in an invalid state, and no API
+# endpoint can approve/write skills (approval is a human act in the repo).
+node -e "const s=require('./skills'); const bad=s.listSkills().filter(x=>x.status==='invalid'); if(bad.length){console.error('invalid skills:', bad.map(b=>b.name+': '+b.reason).join('; ')); process.exit(1);}" 2>/dev/null; check $? "no skill in an invalid state (frontmatter/name must be valid)"
+grep -q "app.post('/api/skills'\|app.put('/api/skills'\|app.delete('/api/skills'" server.js; [ "$?" = "1" ]; check $? "no write endpoint for skills (approval is human-only, in the repo)"
+# 4e. Memory v2 gates (cycle 4): memory tables are never synced, and
+# forget is a hard delete (no soft-delete flag that could resurrect facts).
+node -e "const {SYNC_TABLES}=require('./sync'); if(SYNC_TABLES.includes('memory_facts')||SYNC_TABLES.includes('memory_facts_fts')) process.exit(1);"; check $? "memory_facts is not a synced table (memory never leaves the device)"
+grep -q "DELETE FROM memory_facts" memory.js; check $? "forget() hard-deletes memory rows"
+# 4f. Audit-fix gates (cycle 5, 18 Nov 2026): each fixed High has a grep
+# pin so a regression is caught here as well as in tests/cycle5.test.js.
+[ "$(grep -c 'assertWritablePath(p)' tools.js)" -ge 3 ]; check $? "H-4: app-write gate wired into create/edit/append (3 call sites)"
+grep -q "excerpt: redact(" tools.js; check $? "H-1: search_files excerpts are redacted"
+grep -q "DENIED_PATHS.some(re => re.test(e.name)" tools.js; check $? "H-1: search_files walk checks the deny list per file"
+grep -q "no TELEGRAM_CHAT_ID configured" telegram.js; check $? "H-3: Telegram refuses all chats until a chat id is set"
+grep -q "WHATSAPP_ALLOWED_SENDER" whatsapp.js; check $? "M-4: WhatsApp sender allowlist present"
+grep -q "getConfiguredOrder" settings.js server.js; check $? "H-5: configured provider order is served (not just the resolved chain)"
+grep -q "shell characters" settings.js; check $? "M-7: secret validation rejects shell metacharacters"
+grep -q "load-env.sh" tests/run-tests.sh; check $? "M-7: test runner parses .env.local via load-env.sh (never sources it)"
+grep -qE 'source "\$APP_DIR/\.env\.local"|set -a; \. \./\.env\.local' tests/run-tests.sh; [ "$?" = "1" ]; check $? "M-7: no sourcing of .env.local in the test runner"
+grep -q "withDeadline" server.js brain.js; check $? "H-11: turn budget helper wired into agentTurn"
+grep -q "server.on('error'" server.js; check $? "H-15: listen errors fail loudly (no silent port-in-use death)"
+grep -q "assertNotFrozen" server.js; check $? "M-1: freeze gates agentTurn"
+grep -q "normalizeUsage" brain.js; check $? "H-13: token usage accounting present"
+grep -q "classifyText" route.js server.js; check $? "H-14: routing classifies the raw user text"
+grep -q 'style="' public/app.js; [ "$?" = "1" ]; check $? "H-10: no inline styles in the frontend (CSP would block them)"
+grep -q "max-width:100%" public/style.css; check $? "H-10: replay image sizing lives in CSS"
+grep -q "data-approval-decide" public/app.js; check $? "H-6: approvals decidable from the UI"
+grep -q "sectionError" public/app.js; check $? "H-7: loaders render per-section error states"
 # 5. Auth + rate limit present
 grep -q "X-Anku-Token" server.js; check $? "token auth present"
 grep -q "rateLimit" server.js; check $? "rate limit present"

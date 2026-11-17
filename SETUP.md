@@ -76,7 +76,7 @@ git init
 ```
 
 Copy these files from this workspace into `$HOME\personal-ai`:
-`AGENT.md`, `permissions.json`, `skills/goose.md`.
+`AGENT.md`, `permissions.json`, `skills/goose/SKILL.md`.
 Put your Gemini key in `.env.local` as `GEMINI_API_KEY=...` (secure form only).
 
 Working model names, verified 10–11 Nov 2026: **`gemini-3.6-flash`**,

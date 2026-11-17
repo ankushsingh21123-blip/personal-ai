@@ -145,7 +145,11 @@ function capability() {
 // avoids re-grounding a static screen); the frontier model is only the
 // `ground` function, called once per observation.
 async function screenLoop(task, deps, opts = {}) {
-  const maxActions = Number(opts.maxActions || MAX_ACTIONS);
+  // M-21: clamp defensively. The /api/screen/loop route validates
+  // strictly (400 on bad input), but direct callers get a sane bound
+  // instead of a zero-step "success" (NaN) or an unbounded loop (huge).
+  const requested = Number(opts.maxActions);
+  const maxActions = Number.isFinite(requested) ? Math.min(Math.max(Math.floor(requested), 1), 50) : MAX_ACTIONS;
   const clock = deps.clock || Date.now;
   const steps = [];
   const latencies = [];

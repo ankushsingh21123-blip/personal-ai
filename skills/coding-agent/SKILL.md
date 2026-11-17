@@ -1,3 +1,9 @@
+---
+name: coding-agent
+description: Build a project end-to-end with a coding agent (OpenCode primary, goose fallback), tested before reporting.
+triggers: build, project, proof project, opencode, goose, coding agent, app
+---
+
 # Coding agent skill — how the agent builds projects
 
 ## Which coding agent (12 Nov 2026, alternatives research)
