@@ -71,14 +71,20 @@ Verify an install any time with `npm run doctor` in `app/`.
 - [`app/tests/TEST-REPORT.md`](app/tests/TEST-REPORT.md) — test evidence,
   model names, timings, and the live-vs-mocked boundary.
 
-## Status (17 Nov 2026)
+## Status (18 Nov 2026, branch `computer-use` — not merged)
 
-143/143 tests pass (22 live-server Phase A + 30 mocked provider unit +
-37 Phases B–E + 42 product-expansion + 12 improvement-cycle), including
-Phase A2 native function calling for OpenAI + Anthropic (unit-tested only,
-mocked fetch — no live keys on the build VM) and 24 deny-first tools;
-35 security checks pass (npm audit skipped on the VM — endpoint
-unreachable, re-run on the laptop). The 17 Nov cycle added 4 tools
+161/161 tests pass (22 live-server Phase A + 30 mocked provider unit +
+37 Phases B–E + 42 product-expansion + 12 improvement-cycle + 18
+computer-use), including Phase A2 native function calling for OpenAI +
+Anthropic (unit-tested only, mocked fetch — no live keys on the build
+VM) and 25 deny-first tools; 41 security checks pass (npm audit skipped
+on the VM — endpoint unreachable, re-run on the laptop). The
+computer-use cycle added stateful browser sessions (multi-tab, forms,
+DOM + accessibility tree, screenshots, zoom, console/network
+observation, downloads), DOM CHECK verification after every action,
+desktop input via CDP/Xvfb (proven live on a virtual X11 session), the
+`computer_use` tool, budgeted multi-step flows, and the zoom-fixed
+observe loop. The 17 Nov cycle added 4 tools
 (`create_approval`, `file_info`, `append_file`, `recent_activity`),
 redirect-safe `web_fetch`, and a multilingual UI (English/Hindi/Telugu,
 UI chrome only). The live paths for vision, desktop-agent execution,

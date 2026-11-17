@@ -50,6 +50,7 @@ const screen = require('./screen');
 const desktop = require('./desktop');
 const phone = require('./phone');
 const browserMod = require('./browser');
+const computerUseMod = require('./computer-use');
 const { TelegramBot } = require('./telegram');
 const whatsapp = require('./whatsapp');
 // Product expansion (14 Nov 2026): settings/API keys, notifications,
@@ -542,6 +543,24 @@ app.post('/api/browser/act', async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
   finally { await agent.close(); }
+});
+
+// --- computer use: stateful browser sessions + desktop input ---------------
+app.get('/api/computer-use/status', (req, res) => {
+  try { res.json({ ok: true, ...computerUseMod.getComputerUse().status() }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/api/computer-use/act', async (req, res) => {
+  try {
+    const out = await computerUseMod.getComputerUse().act({ ...(req.body || {}), allowLoopback: false });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
+});
+app.post('/api/computer-use/flow', async (req, res) => {
+  try {
+    const out = await computerUseMod.getComputerUse().runFlow(req.body?.steps || [], { session: req.body?.session, budgetMs: req.body?.budgetMs });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(403).json({ ok: false, error: e.message }); }
 });
 
 // --- sync (Phase D) -------------------------------------------------------------

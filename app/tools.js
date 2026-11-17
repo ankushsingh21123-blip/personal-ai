@@ -295,6 +295,21 @@ async function execute(tool, args = {}) {
       audit(tool, args, r.ok, `tests pass=${r.pass} fail=${r.fail}`);
       return r;
     }
+    case 'computer_use': {
+      // Full browser + desktop control (computer-use cycle): stateful
+      // browser sessions (tabs, forms, DOM/a11y, screenshots, zoom,
+      // dom_check, console/network observation) and CDP desktop input.
+      // All deny-first gates live in computer-use.js / browser-session.js:
+      // password fields refused, submit/upload/download need approved
+      // approvals, sensitive text never typed, every action audit-logged
+      // and DOM-verified after acting. allowLoopback is test/demo-only and
+      // is ignored here — the agent tool path never sets it.
+      const { getComputerUse } = require('./computer-use');
+      const cu = getComputerUse();
+      const r = await cu.act({ ...args, allowLoopback: false });
+      audit(tool, { action: args.action }, r.ok !== false, `computer_use ${args.action} ok=${r.ok !== false}`);
+      return r;
+    }
     case 'list_files': {
       const dir = safePath(args.path || '.');
       const items = fs.readdirSync(dir, { withFileTypes: true })
