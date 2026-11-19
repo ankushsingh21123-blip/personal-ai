@@ -265,6 +265,89 @@ class CdpInput {
   }
 }
 
+// --- xdotool execution ------------------------------------------------------
+// Runs the argv builders for real. Needs the xdotool binary + DISPLAY.
+// Coordinates are NORMALISED 0..1 here (unlike xdotoolArgs, which takes
+// pixels): the conversion happens at the actuator edge from the real
+// screen size, read from `xdotool getdisplaygeometry` when no viewport
+// is given. Sensitive text is refused, same as every other input path.
+async function xdotoolAct(action, opts = {}) {
+  if (!action || typeof action !== 'object') throw new Error('xdotool action must be an object');
+  if (action.sensitive) throw new Error('denied: sensitive text (credentials, OTPs) is never typed');
+  if (action.text !== undefined && (typeof action.text !== 'string' || !action.text || action.text.length > 4000)) {
+    throw new Error('xdotool type needs text, 1..4000 chars');
+  }
+  const display = opts.display || process.env.DISPLAY || null;
+  if (!display) throw new Error('xdotool needs a DISPLAY (X11 session)');
+  let viewport = opts.viewport || null;
+  if (!viewport && (action.x !== undefined || action.y !== undefined)) {
+    const geo = await runToolBinary('xdotool', ['getdisplaygeometry'], { display }).catch(() => null);
+    if (geo && geo.stdout) {
+      const m = String(geo.stdout).trim().match(/^(\d+)\s+(\d+)$/);
+      if (m) viewport = { width: Number(m[1]), height: Number(m[2]) };
+    }
+    if (!viewport) viewport = { width: 1280, height: 800 };
+  }
+  const px = { ...action };
+  if (action.x !== undefined || action.y !== undefined) {
+    if (typeof action.x !== 'number' || typeof action.y !== 'number' || action.x < 0 || action.x > 1 || action.y < 0 || action.y > 1) {
+      throw new Error('xdotool click/move needs normalised x and y in 0..1');
+    }
+    px.x = Math.round(action.x * viewport.width);
+    px.y = Math.round(action.y * viewport.height);
+  }
+  const args = xdotoolArgs(px);
+  const r = await runToolBinary('xdotool', args, { display, timeoutMs: opts.timeoutMs || 15000 });
+  return { ok: true, backend: 'xdotool', args, viewport, ...r };
+}
+
+// --- X11 root screenshot ----------------------------------------------------
+// Full-desktop capture (not just the browser window). Tries scrot, then
+// ImageMagick `import`, then `xwd` (converted from xwd to png needs
+// `convert`, so xwd returns raw xwd bytes labelled as such). Returns
+// base64 + backend, or throws naming the missing backend — never a fake.
+async function rootScreenshot(opts = {}) {
+  const display = opts.display || process.env.DISPLAY || null;
+  if (!display) throw new Error('root screenshot needs a DISPLAY (X11 session)');
+  const outFile = path.join(os.tmpdir(), `piplet-root-shot-${process.pid}-${Date.now()}.png`);
+  try {
+    if (which('scrot')) {
+      await runToolBinary('scrot', ['--silent', outFile], { display, timeoutMs: opts.timeoutMs || 15000 });
+      const buf = fs.readFileSync(outFile);
+      return { ok: true, backend: 'scrot', imageBase64: buf.toString('base64'), mimeType: 'image/png', bytes: buf.length };
+    }
+    if (which('import')) {
+      await runToolBinary('import', ['-window', 'root', outFile], { display, timeoutMs: opts.timeoutMs || 15000 });
+      const buf = fs.readFileSync(outFile);
+      return { ok: true, backend: 'import', imageBase64: buf.toString('base64'), mimeType: 'image/png', bytes: buf.length };
+    }
+    throw new Error('no root-screenshot backend on this machine — install scrot (or ImageMagick import)');
+  } finally {
+    try { fs.unlinkSync(outFile); } catch {}
+  }
+}
+
+// --- viewport -> screen coordinates (xdotool calibration) -------------------
+// xdotool clicks in SCREEN pixels; Playwright geometry is in VIEWPORT
+// pixels. The viewport's screen origin is (screenX, screenY + topChrome),
+// but Chromium does not expose topChrome: outerHeight - innerHeight
+// includes an unknown bottom area too (on this VM: 131 total, ~90 top,
+// ~41 bottom — measured live, 19 Nov 2026). So the offset is CALIBRATED,
+// not assumed: the caller tries the candidate top-chrome heights in
+// order, clicks a KNOWN element, and keeps the first one that flips the
+// DOM. Calibration clicks must only run against a known test page — a
+// probe click can focus/activate whatever it lands on.
+function xdotoolTopChromeCandidates(geo) {
+  const full = (geo.outerH || 0) - (geo.innerH || 0);
+  return [...new Set([full, 110, 90, 70, 50, 30])].filter((v) => Number.isFinite(v) && v >= 0);
+}
+
+function xdotoolScreenPoint(viewportX, viewportY, geo, topChrome) {
+  // No side borders under Xvfb: the viewport's left edge is screenX.
+  return { x: geo.screenX + viewportX, y: geo.screenY + topChrome + viewportY };
+}
+
 module.exports = {
   probeEnvironment, XvfbSession, xdotoolArgs, ydotoolArgs, runToolBinary, CdpInput, which,
+  xdotoolAct, rootScreenshot, xdotoolTopChromeCandidates, xdotoolScreenPoint,
 };

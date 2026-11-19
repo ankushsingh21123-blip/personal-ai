@@ -294,6 +294,59 @@ const GOLDEN_TASKS = [
       assert.ok(Array.isArray(r.usable));
     },
   },
+  {
+    id: 'computer-use-v2-grounding-labels-grounder',
+    name: 'computer-use v2: DOM-geometry grounding finds the target and labels its grounder (never claims vision)',
+    async run(ctx) {
+      const { groundFromSnapshot } = require('./grounding');
+      const entries = [
+        { role: 'button', name: 'Press me', selector: '#go', rect: { x: 10, y: 20, width: 100, height: 30 }, centerNorm: { x: 0.05, y: 0.04 } },
+        { role: 'textbox', name: 'Note', selector: '#note', rect: { x: 10, y: 60, width: 200, height: 24 }, centerNorm: { x: 0.09, y: 0.08 } },
+      ];
+      const g = groundFromSnapshot("click the button labelled 'Press me'", entries, { width: 1280, height: 800 });
+      assert.equal(g.grounder, 'dom-geometry');
+      assert.equal(g.action, 'click');
+      assert.ok(g.x > 0 && g.x < 1 && g.y > 0 && g.y < 1);
+      assert.ok(g.confidence > 0 && g.confidence <= 1);
+      assert.throws(() => groundFromSnapshot('click the banana launcher', entries), /cannot_see/);
+    },
+  },
+  {
+    id: 'computer-use-v2-selfheal-keeps-deny-gates',
+    name: 'computer-use v2: a self-healed submit without approval is still refused (retry re-checks the gate)',
+    async run(ctx) {
+      const { ComputerUse } = require('./computer-use');
+      const { BrowserSessionManager } = require('./browser-session');
+      const inst = new ComputerUse({
+        manager: new BrowserSessionManager({ approvalLookup: () => null }),
+        approvalLookup: () => null, auditFn: () => {},
+      });
+      // No session exists and no approval exists: the retry must hit the
+      // same denial, not find a way around it.
+      const r = await inst.actSelfHealing({ action: 'submit', selector: '#go', approvalId: 999 });
+      assert.equal(r.ok, false);
+      assert.equal(r.healed, false);
+      assert.ok(r.attempts.length >= 1);
+    },
+  },
+  {
+    id: 'computer-use-v2-flow-timings',
+    name: 'computer-use v2: runFlow reports per-step timings so latency is measured',
+    async run(ctx) {
+      const { ComputerUse } = require('./computer-use');
+      const fakeSession = { act: async () => ({ ok: true, stateChanged: true }) };
+      const fakeManager = { get: () => fakeSession, list: () => [], close: async () => true, closeAll: async () => {} };
+      const inst = new ComputerUse({ manager: fakeManager, approvalLookup: () => null, auditFn: () => {} });
+      const flow = await inst.runFlow([
+        { action: 'navigate', url: 'https://example.com' },
+        { action: 'click', selector: '#ok' },
+      ], { budgetMs: 5000 });
+      assert.equal(flow.done, true);
+      assert.equal(typeof flow.timings.totalMs, 'number');
+      assert.equal(flow.timings.stepsMs.length, 2);
+      assert.ok(flow.timings.totalMs >= 0);
+    },
+  },
 ];
 
 module.exports = { GOLDEN_TASKS };

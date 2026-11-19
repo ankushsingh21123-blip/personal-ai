@@ -200,6 +200,10 @@ function validateAction(action) {
     }
     out.region = r;
   }
+  if (action.action === 'snapshot') {
+    if (action.fresh !== undefined && typeof action.fresh !== 'boolean') throw new Error('snapshot fresh must be a boolean');
+    out.fresh = action.fresh !== false;
+  }
   if (action.action === 'dom_check') {
     out.checks = validateChecks(action.checks);
     if (!out.checks.length) throw new Error('dom_check needs checks: 1..20 assertions');
@@ -251,6 +255,12 @@ function snapshotDom() {
     if (seen.has(sel)) continue;
     seen.add(sel);
     const entry = { role: el.getAttribute('role') || el.tagName.toLowerCase(), name: nameOf(el), selector: sel };
+    // v2: real rendered geometry — the visual grounding path clicks at
+    // the element's centre in normalised 0..1, so it needs the rect.
+    entry.rect = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 800;
+    entry.centerNorm = { x: (rect.x + rect.width / 2) / vw, y: (rect.y + rect.height / 2) / vh };
     const tag = el.tagName.toLowerCase();
     if (tag === 'input') {
       entry.inputType = String(el.getAttribute('type') || 'text').toLowerCase();
@@ -310,7 +320,11 @@ async function domCheck(page, checks) {
     else if (c.type === 'visible') { passed = d.visible === true; actual = d.visible; }
     return { check: c, passed, actual };
   });
-  return { ok: results.every((r) => r.passed), url, title, checks: results };
+  // v2: the page text hash — the caller reuses it for the post-action
+  // state digest instead of running a second page.evaluate for the same
+  // text (one redundant snapshot of the DOM per verified action removed).
+  const textHash = crypto.createHash('sha256').update(String(dom.text || '')).digest('hex').slice(0, 16);
+  return { ok: results.every((r) => r.passed), url, title, checks: results, textHash, textLength: String(dom.text || '').length };
 }
 
 async function stateDigest(page) {
@@ -528,6 +542,7 @@ class StatefulBrowserSession {
   async act(rawAction) {
     assertNotFrozen();
     this.assertOpen();
+    const t0 = Date.now(); // v2: every action reports its own latency (ms)
     const a = validateAction(rawAction);
     // URL policy is enforced BEFORE any browser launches: a denied URL
     // must never cost a Chromium process.
@@ -586,16 +601,28 @@ class StatefulBrowserSession {
         }))),
       };
     } else if (a.action === 'snapshot') {
-      const entries = await page.evaluate(snapshotDom);
-      const list = (Array.isArray(entries) ? entries : []).slice(0, 200).map((e, i) => ({
-        index: i, role: String(e?.role || ''), name: String(e?.name || '').slice(0, 80),
-        selector: String(e?.selector || '').slice(0, 500),
-        ...(e?.inputType ? { inputType: String(e.inputType) } : {}),
-        ...(e?.checked !== undefined ? { checked: !!e.checked } : {}),
-        ...(e?.value !== undefined ? { value: String(e.value).slice(0, 80) } : {}),
-      }));
-      this.lastSnapshot = { url: typeof page.url === 'function' ? page.url() : null, entries: list, at: Date.now() };
-      result = { ok: true, url: this.lastSnapshot.url, entries: list };
+      // v2: fresh:false reuses a snapshot taken <5s ago on the same URL —
+      // observe-act-verify loops re-snapshot constantly, and a fresh
+      // evaluate per loop step is the biggest wasted cost. Default stays
+      // fresh (callers that need current geometry say so explicitly).
+      const nowUrl = typeof page.url === 'function' ? page.url() : null;
+      if (a.fresh === false && this.lastSnapshot && this.lastSnapshot.url === nowUrl &&
+          Date.now() - this.lastSnapshot.at < 5000) {
+        result = { ok: true, url: this.lastSnapshot.url, entries: this.lastSnapshot.entries, cached: true, ageMs: Date.now() - this.lastSnapshot.at };
+      } else {
+        const entries = await page.evaluate(snapshotDom);
+        const list = (Array.isArray(entries) ? entries : []).slice(0, 200).map((e, i) => ({
+          index: i, role: String(e?.role || ''), name: String(e?.name || '').slice(0, 80),
+          selector: String(e?.selector || '').slice(0, 500),
+          ...(e?.rect ? { rect: { x: e.rect.x, y: e.rect.y, width: e.rect.width, height: e.rect.height } } : {}),
+          ...(e?.centerNorm ? { centerNorm: { x: e.centerNorm.x, y: e.centerNorm.y } } : {}),
+          ...(e?.inputType ? { inputType: String(e.inputType) } : {}),
+          ...(e?.checked !== undefined ? { checked: !!e.checked } : {}),
+          ...(e?.value !== undefined ? { value: String(e.value).slice(0, 80) } : {}),
+        }));
+        this.lastSnapshot = { url: typeof page.url === 'function' ? page.url() : null, entries: list, at: Date.now() };
+        result = { ok: true, url: this.lastSnapshot.url, entries: list, cached: false };
+      }
     } else if (a.action === 'a11y') {
       // Prefer the real accessibility tree; the headless-shell build has
       // no page.accessibility, so fall back to a DOM-derived tree and say
@@ -746,17 +773,26 @@ class StatefulBrowserSession {
       result = { ok: true, closed: id };
     }
     // Post-action DOM CHECK: explicit expectations + state digest diff.
+    // v2: when expectations were checked, domCheck already read the page
+    // text — reuse its hash for the after-digest instead of a second
+    // page.evaluate for the same text.
+    let verification = null;
     if (MUTATING.has(a.action) && a.action !== 'close') {
-      const after = await stateDigest(page);
+      if (a.expect && a.expect.length) {
+        verification = await domCheck(page, a.expect);
+      }
+      const after = verification
+        ? { url: verification.url, title: String(verification.title).slice(0, 120), textHash: verification.textHash, textLength: verification.textLength }
+        : await stateDigest(page);
       result.stateChanged = before && after && (before.url !== after.url || before.textHash !== after.textHash || before.title !== after.title);
       result.before = before;
       result.after = after;
-      if (a.expect && a.expect.length) {
-        const verification = await domCheck(page, a.expect);
+      if (verification) {
         result.verification = verification;
         if (!verification.ok) result.ok = false;
       }
     }
+    result.ms = Date.now() - t0;
     audit('browser.' + a.action, { session: this.id, action: a.action, tab: this.activeTab }, result.ok !== false, `browser session ${a.action} ok=${result.ok !== false}`);
     return result;
   }

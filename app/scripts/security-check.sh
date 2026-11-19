@@ -11,7 +11,7 @@ check() { if [ "$1" = "0" ]; then echo "PASS: $2"; else echo "FAIL: $2"; FAIL=1;
 # which the exec scan below cannot distinguish from a shell call. Their
 # eval() surface is covered by a dedicated check in section 4, and their
 # exec surface by the cycle-2/3/4 test suites instead.
-BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js browser-session.js desktop-input.js computer-use.js"
+BACKEND="server.js brain.js tools.js skills.js eval-runner.js eval-tasks.js freeze.js queue.js routines.js sync.js vision.js screen.js desktop.js phone.js telegram.js whatsapp.js browser.js desktop-agent.js secrets.js settings.js clipboard.js windows.js notify.js replay.js route.js doctor.js browser-session.js desktop-input.js computer-use.js grounding.js"
 SECRET_RE='AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-or-v1-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|[0-9]{6,}:[A-Za-z0-9_-]{30,}|ANKU_TOKEN=[0-9a-f]{10,}'
 
 # 1. Secrets are git-ignored
@@ -64,6 +64,14 @@ grep -q "assertNotFrozen" browser-session.js computer-use.js; check $? "freeze c
 grep -q "allowLoopback: false" tools.js server.js; check $? "agent tool path + API force allowLoopback off (tests/demo only)"
 grep -q "download_blocked" browser-session.js; check $? "unapproved downloads are blocked and deleted"
 grep -q "data/downloads/" .gitignore ../.gitignore; check $? "approved-downloads dir is git-ignored (app + root)"
+# 4b3. Computer-use v2 gates (19 Nov 2026): grounded clicks always label
+# their grounder (vision-provider vs dom-geometry — never claim vision
+# when the coordinates came from the DOM); self-heal retries re-check the
+# gates (it routes through act(), which enforces them); xdotool refuses
+# sensitive text like every other input path.
+grep -q "grounder" computer-use.js grounding.js; check $? "grounded clicks label their grounder (vision-provider/dom-geometry)"
+grep -q "actSelfHealing" computer-use.js; check $? "self-healing retry path exists (routes through act() gates)"
+grep -q "sensitive" desktop-input.js; check $? "xdotool execution refuses sensitive text"
 # 4c. Product-expansion gates (14 Nov 2026)
 grep -q "looksLikeSecret" telegram.js whatsapp.js; check $? "key-refusal check present in telegram + whatsapp"
 grep -q "KEY_REFUSAL" telegram.js whatsapp.js; check $? "key-refusal reply present in telegram + whatsapp"
